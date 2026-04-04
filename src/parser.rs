@@ -335,21 +335,9 @@ pub fn is_path_referenced(body: &str, rel_path: &Path) -> ReferenceStatus {
     let mut has_broken_path = false;
 
     // Collect all matches first to avoid false positives
-    for mat in re.find_iter(&normalized_body) {
-        // Extract just the path part (group 1 is the captured path)
-        let candidate = mat.as_str();
-
-        // Remove leading non-path character if present
-        let candidate =
-            if candidate.len() > 1 && !candidate.chars().next().unwrap().is_alphanumeric() {
-                &candidate[1..]
-            } else {
-                candidate
-            };
-
-        // Remove trailing non-path character if present
-        let candidate =
-            candidate.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/');
+    // Use captures_iter to directly extract the captured path group
+    for caps in re.captures_iter(&normalized_body) {
+        let candidate = caps.get(1).map(|m| m.as_str()).unwrap_or("");
 
         if candidate == path_str_posix {
             found_correct = true;
@@ -358,10 +346,12 @@ pub fn is_path_referenced(body: &str, rel_path: &Path) -> ReferenceStatus {
         }
     }
 
-    if found_correct {
-        ReferenceStatus::Found
-    } else if has_broken_path {
+    // Report BrokenPath if ANY broken reference exists, even if correct ones also exist
+    // This ensures broken links are not silently ignored
+    if has_broken_path {
         ReferenceStatus::BrokenPath
+    } else if found_correct {
+        ReferenceStatus::Found
     } else {
         ReferenceStatus::Orphaned
     }

@@ -15,6 +15,9 @@ const MAX_SKILL_NAME_LENGTH: usize = 64;
 const MAX_DESCRIPTION_LENGTH: usize = 1024;
 const MAX_COMPATIBILITY_LENGTH: usize = 500;
 
+/// Maximum file size to read into memory (1MB) to prevent OOM errors
+const MAX_FILE_SIZE: u64 = 1024 * 1024;
+
 /// Validation modes that allow different sets of frontmatter fields.
 ///
 /// Extensible for future modes like `Claude`, etc.
@@ -299,6 +302,18 @@ pub fn validate_skill_references(
 
     for rel_path in &files {
         let file_path = skill_dir.join(rel_path);
+
+        // Check file size before reading to prevent OOM
+        let metadata = match fs::metadata(&file_path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if metadata.len() > MAX_FILE_SIZE {
+            // Skip large files - they likely contain binary data
+            continue;
+        }
+
         if let Ok(content) = fs::read_to_string(&file_path) {
             if content.contains('\0') {
                 continue;
