@@ -1,0 +1,22 @@
+[package]
+name = "shinyskills"
+version = "0.1.0"
+edition = "2021"
+description = "A validation tool for Agent Skills (Rust port of the reference library agentskills/skills-ref)"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive", "color"] }
+regex = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+thiserror = "1.0"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[[bin]]
+name = "shinyskills"
+path = "src/main.rs"

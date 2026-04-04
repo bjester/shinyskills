@@ -1,0 +1,6 @@
+- id: shinyskills-validate
+  name: Validate Agent Skills
+  description: Validates skill directories when any file within them changes
+  entry: shinyskills validate-staged
+  language: rust
+  pass_filenames: true
