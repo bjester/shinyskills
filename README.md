@@ -122,7 +122,6 @@ I'm not a Rust developer, but I was keen to port the tool to Rust because of its
 
 ## License & Attribution
 
-📜 License & Attribution
 This project is a Rust port of [agentskills/skills-ref](https://github.com/agentskills/agentskills/tree/main/skills-ref), originally licensed under Apache 2.0, copyright (c) 2025 Anthropic, PBC.
 
 Key changes and additions in this port:
