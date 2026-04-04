@@ -318,7 +318,7 @@ pub fn is_path_referenced(body: &str, rel_path: &Path) -> ReferenceStatus {
 
     // Build pattern to match the basename with optional directory prefix
     let pattern = format!(
-        r"(?:^|[^A-Za-z0-9._/-])((?:[A-Za-z0-9._-]*/)*{})(?:$|[^A-Za-z0-9._/-])",
+        r"(?:^|[^\w._/-])((?:[\w._-]*/)*{})(?:$|[^\w._/-])",
         regex::escape(path_str_basename)
     );
 
