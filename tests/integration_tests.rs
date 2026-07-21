@@ -252,6 +252,53 @@ Body
 }
 
 #[test]
+fn test_realistic_tweetclaw_skill_fixture_references_files() {
+    let tmp_dir = TempDir::new().unwrap();
+    let skill_dir = tmp_dir.path().join("tweetclaw");
+    fs::create_dir(&skill_dir).unwrap();
+
+    let refs_dir = skill_dir.join("references");
+    fs::create_dir(&refs_dir).unwrap();
+    fs::write(
+        refs_dir.join("openclaw-approval.md"),
+        "# OpenClaw Approval\n\nUse source gathering before approved account actions.\n",
+    )
+    .unwrap();
+
+    let scripts_dir = skill_dir.join("scripts");
+    fs::create_dir(&scripts_dir).unwrap();
+    fs::write(
+        scripts_dir.join("validate-export.mjs"),
+        "JSON.parse(process.argv[2] || '{}');\n",
+    )
+    .unwrap();
+
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        r#"---
+name: tweetclaw
+description: Use TweetClaw for reviewed OpenClaw X/Twitter source packets, monitor summaries, and approval-gated account actions.
+license: MIT
+compatibility: OpenClaw plugin published as npm:@xquik/tweetclaw
+metadata:
+  package: "@xquik/tweetclaw"
+  clawhub: "https://clawhub.ai/plugins/@xquik/tweetclaw"
+---
+# TweetClaw
+
+Review [OpenClaw approval guidance](references/openclaw-approval.md) before
+using write-capable tools. Validate exported JSON with
+`scripts/validate-export.mjs` before passing source packets to another skill.
+"#,
+    )
+    .unwrap();
+
+    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    assert!(warnings.is_empty());
+    assert!(errors.is_empty());
+}
+
+#[test]
 fn test_allowed_tools_accepted() {
     let tmp_dir = TempDir::new().unwrap();
     let skill_dir = tmp_dir.path().join("my-skill");
