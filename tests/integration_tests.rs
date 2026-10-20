@@ -1420,3 +1420,126 @@ fn cli_validate_staged_resolves_root_config_once_and_ignores_nested() {
         stderr_of(&output)
     );
 }
+
+#[test]
+fn test_config_declared_field_passes_without_vibe_mode() {
+    let tmp = TempDir::new().unwrap();
+    let skill_dir = tmp.path().join("extra-field");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        r#"---
+name: extra-field
+description: Declares a field the default rules reject.
+user-invocable: true
+---
+Body text.
+"#,
+    )
+    .unwrap();
+
+    // Baseline options reject the field.
+    let baseline =
+        shinyskills::config::resolve_validation_options(None, ValidationMode::Default).unwrap();
+    let (_, errors) = validate_with_options(&skill_dir, &baseline);
+    assert!(
+        errors.iter().any(|e| e.contains("user-invocable")),
+        "errors: {:?}",
+        errors
+    );
+
+    // The same skill passes once configuration declares the field.
+    let config_path = tmp.path().join(".shinyskills.toml");
+    fs::write(
+        &config_path,
+        "[validation]\nallowed_fields = [\"name\", \"description\", \"user-invocable\"]\n",
+    )
+    .unwrap();
+    let config = shinyskills::config::load_config(&config_path).unwrap();
+    let options =
+        shinyskills::config::resolve_validation_options(Some(&config), ValidationMode::Default)
+            .unwrap();
+
+    let (warnings, errors) = validate_with_options(&skill_dir, &options);
+    assert_eq!(warnings, Vec::<String>::new(), "got: {:?}", warnings);
+    assert_eq!(errors, Vec::<String>::new(), "got: {:?}", errors);
+}
+
+#[test]
+fn cli_validate_reports_invalid_ignore_glob() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    make_git_repo(&repo);
+    let skill_dir = repo.join("skills").join("plain-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: plain-skill\ndescription: Plain.\n---\nBody text.\n",
+    )
+    .unwrap();
+
+    let bad_config = tmp.path().join("globs.toml");
+    fs::write(&bad_config, "[validation]\nignore_files = [\"[\"]\n").unwrap();
+
+    let output = run_cli(&[
+        std::path::Path::new("validate"),
+        &skill_dir,
+        std::path::Path::new("--config"),
+        &bad_config,
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr_of(&output);
+    // The diagnostic names the pattern that cannot be compiled.
+    assert!(
+        stderr.contains("ignore_files glob `[`"),
+        "stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn cli_validate_staged_ignores_nested_config_files() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    make_git_repo(&repo);
+    let skill_a = repo.join("skills").join("skill-a");
+    let skill_b = repo.join("skills").join("skill-b");
+    for dir in [&skill_a, &skill_b] {
+        fs::create_dir_all(dir).unwrap();
+        let name = dir.file_name().unwrap().to_str().unwrap().to_string();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!(
+                "---\nname: {}\ndescription: A plain skill.\n---\nBody text.\n",
+                name
+            ),
+        )
+        .unwrap();
+        fs::write(dir.join("CHANGELOG.md"), "# Changelog\n").unwrap();
+        // Nested configurations must never be consulted.
+        fs::write(
+            dir.join(".shinyskills.toml"),
+            "[validation]\nignore_files = [\"CHANGELOG.md\"]\n",
+        )
+        .unwrap();
+    }
+
+    let output = run_cli(&[
+        std::path::Path::new("validate-staged"),
+        &skill_a.join("SKILL.md"),
+        &skill_b.join("SKILL.md"),
+    ]);
+    // Warnings keep the exit status, so the changelog must surface on stderr.
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("[skill-a] Orphaned file (not referenced): CHANGELOG.md"),
+        "stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("[skill-b] Orphaned file (not referenced): CHANGELOG.md"),
+        "stderr: {}",
+        stderr
+    );
+}
