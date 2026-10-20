@@ -11,53 +11,15 @@ use crate::parser::{
     find_skill_md, is_path_referenced, parse_frontmatter, scan_skill_files, ReferenceStatus,
 };
 
+// Re-exported so `shinyskills::validator::ValidationMode` keeps resolving.
+pub use crate::models::ValidationMode;
+
 const MAX_SKILL_NAME_LENGTH: usize = 64;
 const MAX_DESCRIPTION_LENGTH: usize = 1024;
 const MAX_COMPATIBILITY_LENGTH: usize = 500;
 
 /// Maximum file size to read into memory (1MB) to prevent OOM errors
 const MAX_FILE_SIZE: u64 = 1024 * 1024;
-
-/// Validation modes that allow different sets of frontmatter fields.
-///
-/// Extensible for future modes like `Claude`, etc.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValidationMode {
-    /// Default validation - strict set of allowed fields
-    Default,
-    /// Vibe-specific validation - allows additional fields like `user-invocable`
-    Vibe,
-    // Future: Claude, Custom, etc.
-}
-
-impl ValidationMode {
-    /// Get the allowed fields for this validation mode.
-    pub fn allowed_fields(&self) -> &[&str] {
-        match self {
-            ValidationMode::Default => DEFAULT_ALLOWED_FIELDS,
-            ValidationMode::Vibe => VIBE_ALLOWED_FIELDS,
-        }
-    }
-}
-
-const DEFAULT_ALLOWED_FIELDS: &[&str] = &[
-    "name",
-    "description",
-    "license",
-    "allowed-tools",
-    "metadata",
-    "compatibility",
-];
-
-const VIBE_ALLOWED_FIELDS: &[&str] = &[
-    "name",
-    "description",
-    "license",
-    "allowed-tools",
-    "metadata",
-    "compatibility",
-    "user-invocable",
-];
 
 fn validate_name(name: &str, skill_dir: Option<&Path>) -> Vec<String> {
     let mut errors = Vec::new();
