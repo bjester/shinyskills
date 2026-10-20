@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::models::ValidationOptions;
 use crate::parser::{
     find_skill_md, is_path_referenced, parse_frontmatter, scan_skill_files, ReferenceStatus,
 };
@@ -115,15 +116,15 @@ fn validate_compatibility(compatibility: &str) -> Vec<String> {
 
 fn validate_metadata_fields(
     metadata: &HashMap<String, serde_json::Value>,
-    mode: ValidationMode,
+    options: &ValidationOptions,
 ) -> Vec<String> {
     let mut errors = Vec::new();
-    let allowed = mode.allowed_fields();
 
-    let extra_fields: Vec<&String> = metadata
+    let mut extra_fields: Vec<&String> = metadata
         .keys()
-        .filter(|k| !allowed.contains(&k.as_str()))
+        .filter(|k| !options.allows_field(k))
         .collect();
+    extra_fields.sort();
 
     if !extra_fields.is_empty() {
         errors.push(format!(
@@ -133,14 +134,14 @@ fn validate_metadata_fields(
                 .map(|s| s.as_str())
                 .collect::<Vec<_>>()
                 .join(", "),
-            allowed
+            options.allowed_field_names()
         ));
     }
 
     errors
 }
 
-/// Validate parsed skill metadata.
+/// Validate parsed skill metadata against resolved options.
 ///
 /// This is the core validation function that works on already-parsed metadata,
 /// avoiding duplicate file I/O when called from the parser.
@@ -148,17 +149,17 @@ fn validate_metadata_fields(
 /// # Arguments
 /// * `metadata` - Parsed YAML frontmatter dictionary
 /// * `skill_dir` - Optional path to skill directory (for name-directory match check)
-/// * `mode` - Validation mode determining allowed fields
+/// * `options` - Resolved validation options determining allowed fields
 ///
 /// # Returns
 /// List of validation error messages. Empty list means valid.
-pub fn validate_metadata(
+pub fn validate_metadata_with_options(
     metadata: &HashMap<String, serde_json::Value>,
     skill_dir: Option<&Path>,
-    mode: ValidationMode,
+    options: &ValidationOptions,
 ) -> Vec<String> {
     let mut errors = Vec::new();
-    errors.extend(validate_metadata_fields(metadata, mode));
+    errors.extend(validate_metadata_fields(metadata, options));
 
     // Validate name field
     match metadata.get("name") {
@@ -194,6 +195,24 @@ pub fn validate_metadata(
     errors
 }
 
+/// Validate parsed skill metadata for a validation mode.
+///
+/// Kept for compatibility with callers that do not resolve configuration. It
+/// delegates to [`validate_metadata_with_options`] using the mode's built-in
+/// rules, which is what a run without any `.shinyskills.toml` produces.
+pub fn validate_metadata(
+    metadata: &HashMap<String, serde_json::Value>,
+    skill_dir: Option<&Path>,
+    mode: ValidationMode,
+) -> Vec<String> {
+    match crate::config::resolve_validation_options(None, mode) {
+        Ok(options) => validate_metadata_with_options(metadata, skill_dir, &options),
+        Err(e) => vec![e.to_string()],
+    }
+}
+
+/// Record how `current_file`'s content refers to each of `files`.
+///
 fn track_reference_status(
     files: &[PathBuf],
     current_file: &Path,
@@ -223,21 +242,27 @@ fn track_reference_status(
 /// Validate references in SKILL.md and all other skill files.
 ///
 /// Tracks orphaned files across ALL files - a file is only orphaned if it's not
-/// referenced in ANY skill file (SKILL.md or other referenced files).
+/// referenced in ANY skill file (SKILL.md or other referenced files). Files
+/// matched by `ignore_files` take no part in reference analysis.
 ///
 /// # Arguments
 /// * `skill_dir` - Path to the skill directory
 /// * `body` - Markdown body content from SKILL.md
+/// * `options` - Resolved validation options for ignored and scannable files
 ///
 /// # Returns
 /// Tuple of (warnings, errors):
 /// - warnings: Files orphaned across all skill files
 /// - errors: Broken path references from any file
-pub fn validate_skill_references(
+pub fn validate_skill_references_with_options(
     skill_dir: &Path,
     body: &str,
+    options: &ValidationOptions,
 ) -> Result<(Vec<String>, Vec<String>), std::io::Error> {
-    let files = scan_skill_files(skill_dir)?;
+    let files: Vec<PathBuf> = scan_skill_files(skill_dir)?
+        .into_iter()
+        .filter(|rel_path| !options.is_ignored(rel_path))
+        .collect();
 
     let mut file_statuses: HashMap<PathBuf, HashSet<ReferenceStatus>> = HashMap::new();
     for f in &files {
@@ -263,6 +288,10 @@ pub fn validate_skill_references(
     }
 
     for rel_path in &files {
+        if !options.is_scannable(rel_path) {
+            continue;
+        }
+
         let file_path = skill_dir.join(rel_path);
 
         // Check file size before reading to prevent OOM
@@ -307,7 +336,7 @@ pub fn validate_skill_references(
     Ok((all_warnings, all_errors))
 }
 
-/// Validate a skill directory.
+/// Validate a skill directory with resolved options.
 ///
 /// Performs comprehensive validation including:
 /// - Frontmatter structure and required fields
@@ -316,13 +345,16 @@ pub fn validate_skill_references(
 ///
 /// # Arguments
 /// * `skill_dir` - Path to the skill directory
-/// * `mode` - Validation mode determining allowed fields
+/// * `options` - Resolved validation options for this run
 ///
 /// # Returns
 /// Tuple of (warnings, errors):
 /// - warnings: Orphaned files (not referenced in any skill file)
 /// - errors: Validation errors (invalid metadata, broken paths)
-pub fn validate(skill_dir: &Path, mode: ValidationMode) -> (Vec<String>, Vec<String>) {
+pub fn validate_with_options(
+    skill_dir: &Path,
+    options: &ValidationOptions,
+) -> (Vec<String>, Vec<String>) {
     let skill_dir = PathBuf::from(skill_dir);
 
     if !skill_dir.exists() {
@@ -359,9 +391,9 @@ pub fn validate(skill_dir: &Path, mode: ValidationMode) -> (Vec<String>, Vec<Str
         Err(e) => return (Vec::new(), vec![e.to_string()]),
     };
 
-    let errors = validate_metadata(&metadata, Some(&skill_dir), mode);
+    let errors = validate_metadata_with_options(&metadata, Some(&skill_dir), options);
 
-    match validate_skill_references(&skill_dir, &body) {
+    match validate_skill_references_with_options(&skill_dir, &body, options) {
         Ok((ref_warnings, ref_errors)) => {
             let mut all_errors = errors;
             all_errors.extend(ref_errors);
@@ -372,4 +404,31 @@ pub fn validate(skill_dir: &Path, mode: ValidationMode) -> (Vec<String>, Vec<Str
             vec![format!("Error scanning skill files: {}", e)],
         ),
     }
+}
+
+/// Validate a skill directory for a validation mode without configuration.
+///
+/// Resolves the mode's built-in options and delegates to
+/// [`validate_with_options`]. Callers that have repository configuration should
+/// resolve options themselves so discovery happens once per repository.
+pub fn validate(skill_dir: &Path, mode: ValidationMode) -> (Vec<String>, Vec<String>) {
+    match crate::config::resolve_validation_options(None, mode) {
+        Ok(options) => validate_with_options(skill_dir, &options),
+        Err(e) => (Vec::new(), vec![e.to_string()]),
+    }
+}
+
+/// Validate references using the built-in rules for the default mode.
+///
+/// Kept for callers that do not resolve configuration; equivalent to calling
+/// [`validate_skill_references_with_options`] with baseline options.
+pub fn validate_skill_references(
+    skill_dir: &Path,
+    body: &str,
+) -> Result<(Vec<String>, Vec<String>), std::io::Error> {
+    let options = match crate::config::resolve_validation_options(None, ValidationMode::Default) {
+        Ok(options) => options,
+        Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)),
+    };
+    validate_skill_references_with_options(skill_dir, body, &options)
 }

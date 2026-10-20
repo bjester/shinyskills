@@ -96,6 +96,13 @@ impl ValidationOptions {
     pub fn allows_field(&self, field: &str) -> bool {
         self.allowed_fields.contains(field)
     }
+
+    /// Accepted frontmatter keys, sorted for stable diagnostics.
+    pub(crate) fn allowed_field_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.allowed_fields.iter().cloned().collect();
+        names.sort();
+        names
+    }
 }
 
 /// Lowercased extension of `path` including the leading dot.

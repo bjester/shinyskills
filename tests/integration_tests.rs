@@ -6,7 +6,7 @@ use shinyskills::parser::{
     find_skill_dir_for_file, find_skill_md, is_path_referenced, ReferenceStatus,
 };
 use shinyskills::prompt::to_prompt;
-use shinyskills::validator::{validate, ValidationMode};
+use shinyskills::validator::{validate, validate_with_options, ValidationMode};
 
 fn create_valid_skill(dir: &TempDir) -> PathBuf {
     let skill_dir = dir.path().join("my-skill");
@@ -653,20 +653,18 @@ No file references.
 }
 
 #[test]
-fn test_file_referenced_in_other_skill_file() {
+fn test_file_referenced_in_other_scannable_file() {
     let tmp_dir = TempDir::new().unwrap();
     let skill_dir = tmp_dir.path().join("my-skill");
     fs::create_dir(&skill_dir).unwrap();
 
     let refs_dir = skill_dir.join("references");
     fs::create_dir(&refs_dir).unwrap();
-    let scripts_dir = skill_dir.join("scripts");
-    fs::create_dir(&scripts_dir).unwrap();
 
     fs::write(refs_dir.join("GUIDE.md"), "# Guide").unwrap();
     fs::write(
-        scripts_dir.join("run.py"),
-        "# Script\n# See references/GUIDE.md",
+        refs_dir.join("INDEX.md"),
+        "# Index\n\nSee [the guide](references/GUIDE.md).",
     )
     .unwrap();
     fs::write(refs_dir.join("UNUSED.md"), "# Unused").unwrap();
@@ -677,7 +675,7 @@ fn test_file_referenced_in_other_skill_file() {
 name: my-skill
 description: A test skill
 ---
-Run `scripts/run.py` to execute.
+Read [the index](references/INDEX.md).
 "#,
     )
     .unwrap();
@@ -1089,4 +1087,90 @@ fn test_validate_staged_with_context_dir() {
     fs::create_dir(&outside_dir).unwrap();
     let result = find_skill_dir_for_file(&file_path, Some(&outside_dir), 3);
     assert_eq!(result, None);
+}
+
+#[test]
+fn test_scoped_scanning_and_ignore_files() {
+    let tmp_dir = TempDir::new().unwrap();
+    let skill_dir = tmp_dir.path().join("scoped-skill");
+    let scripts_dir = skill_dir.join("scripts");
+    let tests_dir = skill_dir.join("tests");
+    fs::create_dir_all(&scripts_dir).unwrap();
+    fs::create_dir_all(&tests_dir).unwrap();
+
+    fs::write(
+        scripts_dir.join("run.sh"),
+        "#!/bin/sh\n# placeholder asset for scoped-skill\n",
+    )
+    .unwrap();
+    // Correct basename, wrong directory: must not produce a broken-path error.
+    fs::write(
+        tests_dir.join("run.test.cjs"),
+        "const runner = require(\"./wrong/run.sh\");\ntesting,\n",
+    )
+    .unwrap();
+    fs::write(
+        skill_dir.join("CHANGELOG.md"),
+        "# Changelog\n\nNothing yet.\n",
+    )
+    .unwrap();
+
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        r#"---
+name: scoped-skill
+description: Demonstrates scoped scanning and ignored maintenance files.
+---
+Run `./scripts/run.sh`, then see [the harness](tests/run.test.cjs).
+"#,
+    )
+    .unwrap();
+
+    let config_path = tmp_dir.path().join(".shinyskills.toml");
+    fs::write(
+        &config_path,
+        "[validation]\nignore_files = [\"CHANGELOG.md\"]\nscan_extensions = [\".md\"]\n",
+    )
+    .unwrap();
+    let config = shinyskills::config::load_config(&config_path).unwrap();
+    let options =
+        shinyskills::config::resolve_validation_options(Some(&config), ValidationMode::Default)
+            .unwrap();
+
+    let (warnings, errors) = validate_with_options(&skill_dir, &options);
+
+    assert_eq!(warnings, Vec::<String>::new(), "got: {:?}", warnings);
+    assert_eq!(errors, Vec::<String>::new(), "got: {:?}", errors);
+}
+
+#[test]
+fn test_non_scannable_file_contents_do_not_resolve_orphans() {
+    let tmp_dir = TempDir::new().unwrap();
+    let skill_dir = tmp_dir.path().join("scan-skill");
+    let scripts_dir = skill_dir.join("scripts");
+    let assets_dir = skill_dir.join("assets");
+    fs::create_dir_all(&scripts_dir).unwrap();
+    fs::create_dir_all(&assets_dir).unwrap();
+
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: scan-skill\ndescription: Verifies scoped content scanning.\n---\nRun `scripts/run.sh`.\n",
+    )
+    .unwrap();
+    fs::write(
+        scripts_dir.join("run.sh"),
+        "#!/bin/sh\n# assets/orphan.txt\n",
+    )
+    .unwrap();
+    fs::write(assets_dir.join("orphan.txt"), "orphan\n").unwrap();
+
+    let options =
+        shinyskills::config::resolve_validation_options(None, ValidationMode::Default).unwrap();
+    let (warnings, errors) = validate_with_options(&skill_dir, &options);
+
+    assert!(errors.is_empty(), "errors: {:?}", errors);
+    assert_eq!(
+        warnings,
+        vec!["Orphaned file (not referenced): assets/orphan.txt"]
+    );
 }
