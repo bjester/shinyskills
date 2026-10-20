@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage archive contents
+        run: |
+          set -euo pipefail
+          pkg="shinyskills-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "${pkg}"
+          cp "target/${{ matrix.target }}/release/shinyskills" "${pkg}/shinyskills"
+          cp README.md LICENSE "${pkg}/"
+          tar -czf "${pkg}.tar.gz" "${pkg}"
+          echo "Packaged:"
+          tar -tzf "${pkg}.tar.gz"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: shinyskills-${{ github.ref_name }}-${{ matrix.target }}
+          path: shinyskills-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
