@@ -742,6 +742,33 @@ fn test_is_path_referenced_backslash_normalized() {
 }
 
 #[test]
+fn test_is_path_referenced_leading_dot_slash() {
+    let path = PathBuf::from("scripts/find-polluter.sh");
+
+    // Relative forms are the idiomatic way to refer to skill assets.
+    let backtick = "Run `./scripts/find-polluter.sh` first.";
+    assert_eq!(
+        is_path_referenced(backtick, &path),
+        ReferenceStatus::Found,
+        "`./` prefix must normalize away"
+    );
+
+    let link = "[Run](././scripts/find-polluter.sh)";
+    assert_eq!(
+        is_path_referenced(link, &path),
+        ReferenceStatus::Found,
+        "repeated `./` prefixes must normalize away"
+    );
+
+    let windows = "Run .\\scripts\\find-polluter.sh once.";
+    assert_eq!(
+        is_path_referenced(windows, &path),
+        ReferenceStatus::Found,
+        "Windows-style `./` separators must normalize away"
+    );
+}
+
+#[test]
 fn test_to_prompt_empty() {
     let result = to_prompt(&[]);
     assert_eq!(result, "<available_skills>\n</available_skills>");
