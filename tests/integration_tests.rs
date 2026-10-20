@@ -1174,3 +1174,249 @@ fn test_non_scannable_file_contents_do_not_resolve_orphans() {
         vec!["Orphaned file (not referenced): assets/orphan.txt"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Compiled CLI behaviour
+// ---------------------------------------------------------------------------
+
+/// Create `<dir>/.git` so the directory is recognised as a repository root.
+fn make_git_repo(dir: &std::path::Path) {
+    fs::create_dir_all(dir.join(".git")).unwrap();
+}
+
+/// Write a skill whose frontmatter carries an extra `user-invocable` field and
+/// whose only extra file is a maintenance changelog nothing references.
+fn write_vibe_skill(skill_dir: &std::path::Path) {
+    fs::create_dir_all(skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        r#"---
+name: vibe-skill
+description: A skill that declares an extra frontmatter field.
+user-invocable: true
+---
+Nothing references the changelog.
+"#,
+    )
+    .unwrap();
+    fs::write(skill_dir.join("CHANGELOG.md"), "# Changelog\n").unwrap();
+}
+
+fn run_cli(args: &[&std::path::Path]) -> std::process::Output {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_shinyskills"));
+    for arg in args {
+        cmd.arg(arg);
+    }
+    cmd.output().unwrap()
+}
+
+fn stderr_of(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
+#[test]
+fn cli_validate_uses_repository_root_config_and_ignores_nested() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    make_git_repo(&repo);
+    let skill_dir = repo.join("skills").join("vibe-skill");
+    write_vibe_skill(&skill_dir);
+
+    fs::write(
+        repo.join(".shinyskills.toml"),
+        "[validation]\nallowed_fields = [\"user-invocable\"]\nignore_files = [\"CHANGELOG.md\"]\n",
+    )
+    .unwrap();
+
+    // Conflicting configurations that must never be consulted.
+    fs::write(
+        repo.join("skills").join(".shinyskills.toml"),
+        "[validation]\nallowed_fields = [\"name\", \"description\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        skill_dir.join(".shinyskills.toml"),
+        "[validation]\nallowed_fields = [\"name\", \"description\"]\n",
+    )
+    .unwrap();
+
+    let output = run_cli(&[std::path::Path::new("validate"), &skill_dir]);
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+
+    // With the root configuration removed, the nested files still do not count,
+    // so the extra field is rejected again.
+    fs::remove_file(repo.join(".shinyskills.toml")).unwrap();
+    let output = run_cli(&[std::path::Path::new("validate"), &skill_dir]);
+    assert!(!output.status.success());
+    assert!(stderr_of(&output).contains("user-invocable"));
+}
+
+#[test]
+fn cli_validate_config_flag_overrides_discovery() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    make_git_repo(&repo);
+    let skill_dir = repo.join("skills").join("vibe-skill");
+    write_vibe_skill(&skill_dir);
+
+    let config_path = tmp.path().join("custom.toml");
+    fs::write(
+        &config_path,
+        "[validation]\nallowed_fields = [\"user-invocable\"]\nignore_files = [\"CHANGELOG.md\"]\n",
+    )
+    .unwrap();
+
+    let output = run_cli(&[
+        std::path::Path::new("validate"),
+        &skill_dir,
+        std::path::Path::new("--config"),
+        &config_path,
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+    assert!(
+        stderr_of(&output).is_empty(),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+}
+
+#[test]
+fn cli_validate_reports_missing_and_malformed_config() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    make_git_repo(&repo);
+    let skill_dir = repo.join("skills").join("vibe-skill");
+    write_vibe_skill(&skill_dir);
+
+    let missing = tmp.path().join("absent.toml");
+    let output = run_cli(&[
+        std::path::Path::new("validate"),
+        &skill_dir,
+        std::path::Path::new("--config"),
+        &missing,
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("absent.toml"), "stderr: {}", stderr);
+
+    let malformed = tmp.path().join("broken.toml");
+    fs::write(&malformed, "not = valid = toml\n").unwrap();
+    let output = run_cli(&[
+        std::path::Path::new("validate"),
+        &skill_dir,
+        std::path::Path::new("--config"),
+        &malformed,
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("broken.toml"), "stderr: {}", stderr);
+}
+
+#[test]
+fn cli_validate_staged_rejects_missing_explicit_config_without_files() {
+    let tmp = TempDir::new().unwrap();
+    let missing = tmp.path().join("absent.toml");
+
+    let output = run_cli(&[
+        std::path::Path::new("validate-staged"),
+        std::path::Path::new("--config"),
+        &missing,
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("absent.toml"), "stderr: {}", stderr);
+}
+
+#[test]
+fn cli_validate_warns_about_unreferenced_changelog_without_config() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    make_git_repo(&repo);
+    let skill_dir = repo.join("skills").join("vibe-skill");
+
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: vibe-skill\ndescription: Plain skill.\n---\nBody text.\n",
+    )
+    .unwrap();
+    fs::write(skill_dir.join("CHANGELOG.md"), "# Changelog\n").unwrap();
+
+    let output = run_cli(&[std::path::Path::new("validate"), &skill_dir]);
+    assert!(output.status.success());
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("Orphaned file") && stderr.contains("CHANGELOG.md"),
+        "stderr: {}",
+        stderr
+    );
+
+    // Declaring the ignore removes the warning.
+    fs::write(
+        repo.join(".shinyskills.toml"),
+        "[validation]\nignore_files = [\"CHANGELOG.md\"]\n",
+    )
+    .unwrap();
+    let output = run_cli(&[std::path::Path::new("validate"), &skill_dir]);
+    assert!(output.status.success());
+    assert!(
+        stderr_of(&output).is_empty(),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+}
+
+#[test]
+fn cli_validate_staged_resolves_root_config_once_and_ignores_nested() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    make_git_repo(&repo);
+    let skill_a = repo.join("skills").join("skill-a");
+    let skill_b = repo.join("skills").join("skill-b");
+    for dir in [&skill_a, &skill_b] {
+        fs::create_dir_all(dir).unwrap();
+        let name = dir.file_name().unwrap().to_str().unwrap().to_string();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!(
+                "---\nname: {}\ndescription: A plain skill.\n---\nBody text.\n",
+                name
+            ),
+        )
+        .unwrap();
+        fs::write(dir.join("CHANGELOG.md"), "# Changelog\n").unwrap();
+    }
+
+    let changed_a = skill_a.join("SKILL.md");
+    let changed_b = skill_b.join("SKILL.md");
+
+    // No configuration: both skills report the unreferenced changelog.
+    let output = run_cli(&[
+        std::path::Path::new("validate-staged"),
+        &changed_a,
+        &changed_b,
+    ]);
+    assert!(!output.status.success() || !stderr_of(&output).is_empty());
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("skill-a"), "stderr: {}", stderr);
+    assert!(stderr.contains("skill-b"), "stderr: {}", stderr);
+
+    // Root configuration applies to both skills in one resolution.
+    fs::write(
+        repo.join(".shinyskills.toml"),
+        "[validation]\nignore_files = [\"CHANGELOG.md\"]\n",
+    )
+    .unwrap();
+    let output = run_cli(&[
+        std::path::Path::new("validate-staged"),
+        &changed_a,
+        &changed_b,
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+    assert!(
+        stderr_of(&output).is_empty(),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+}

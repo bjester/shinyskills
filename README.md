@@ -37,6 +37,7 @@ Exit codes:
 
 Options:
 - `--vibe`: Enable Vibe-specific validation rules (allows `user-invocable` in frontmatter)
+- `--config <PATH>`: Read configuration from this file instead of the repository root
 
 ### Validate based on changed files (for pre-commit)
 
@@ -52,6 +53,7 @@ This command is designed for pre-commit hooks. It:
 
 Options:
 - `--vibe`: Enable Vibe-specific validation rules
+- `--config <PATH>`: Read configuration from this file instead of the repository root
 - `--context-dir <DIR>`: Limit upward search to within this directory
 - `--max-depth <N>`: Maximum levels to walk up when searching for skill directory (default: 3)
 
@@ -66,6 +68,37 @@ cargo run -- read-properties /path/to/skill-directory
 ```bash
 cargo run -- to-prompt /path/to/skill1 /path/to/skill2
 ```
+
+## Repository Configuration
+
+ShinySkills reads one configuration file: `.shinyskills.toml` in the repository root. It finds that root by walking up from the skill directory until it sees `.git`. A `.git` file, used by worktrees, also counts. Files in skill directories or other subfolders are ignored on purpose. When no file exists, ShinySkills uses built-in defaults and validation behaves as before.
+
+To select the file yourself, pass `--config <PATH>`. An explicit path skips the search entirely. Both `validate` and `validate-staged` accept the option.
+
+### Settings
+
+All keys sit under `[validation]` and all are optional.
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `allowed_fields` | list of strings | `name`, `description`, `license`, `allowed-tools`, `metadata`, `compatibility` | Frontmatter keys the validator accepts |
+| `ignore_files` | list of glob patterns | empty, so nothing is ignored | Files the reference scanner skips |
+| `scan_extensions` | list of strings | `.md` | File types whose body is read for reference syntax |
+
+```toml
+[validation]
+allowed_fields = ["name", "description", "user-invocable"]
+ignore_files = ["CHANGELOG.md", "docs/**"]
+scan_extensions = [".md", ".markdown"]
+```
+
+`allowed_fields` adds to the default list, it does not replace it. A configured list can never remove a built-in key, so an empty list keeps the defaults.
+
+Globs match paths relative to the skill directory. `docs/**` ignores `docs/nested/note.txt` but not `references/docs/note.txt`. A skipped file raises neither an orphan warning nor a broken-path error.
+
+ShinySkills reads a file body only when its extension is listed. This stops shell scripts and source files from producing false broken-path errors. Extensions are matched case-insensitively, so `MD` and `.md` behave the same.
+
+Unknown keys fail the run with an error that names the key, which catches typos such as `[validaton]`.
 
 ## Pre-Commit Hook
 
