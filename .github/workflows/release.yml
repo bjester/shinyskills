@@ -7,6 +7,11 @@ on:
 permissions:
   contents: read
 
+# One publisher per tag, so duplicate runs for the same ref cannot race.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -51,3 +56,31 @@ jobs:
           path: shinyskills-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download every archive from the matrix
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shinyskills-${{ github.ref_name }}-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate one sorted checksum manifest
+        run: |
+          set -euo pipefail
+          cd release-assets
+          ls -1 | LC_ALL=C sort > ../assets.txt
+          xargs -d '\n' -r sha256sum < ../assets.txt > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*
+          generate_release_notes: true
