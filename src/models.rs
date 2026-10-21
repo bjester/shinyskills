@@ -3,6 +3,116 @@
 //
 // Derived from agentskills/skills-ref (Apache-2.0)
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::Path;
+
+/// Validation modes that allow different sets of frontmatter fields.
+///
+/// Extensible for future modes like `Claude`, etc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationMode {
+    /// Default validation - strict set of allowed fields
+    Default,
+    /// Vibe-specific validation - allows additional fields like `user-invocable`
+    Vibe,
+    // Future: Claude, Custom, etc.
+}
+
+impl ValidationMode {
+    /// Get the allowed fields for this validation mode.
+    pub fn allowed_fields(&self) -> &'static [&'static str] {
+        match self {
+            ValidationMode::Default => DEFAULT_ALLOWED_FIELDS,
+            ValidationMode::Vibe => VIBE_ALLOWED_FIELDS,
+        }
+    }
+}
+
+const DEFAULT_ALLOWED_FIELDS: &[&str] = &[
+    "name",
+    "description",
+    "license",
+    "allowed-tools",
+    "metadata",
+    "compatibility",
+];
+
+const VIBE_ALLOWED_FIELDS: &[&str] = &[
+    "name",
+    "description",
+    "license",
+    "allowed-tools",
+    "metadata",
+    "compatibility",
+    "user-invocable",
+];
+
+/// Fully resolved validation settings for one validation run.
+///
+/// Combines the built-in rules of a [`ValidationMode`] with the values read
+/// from a repository configuration file. All state is immutable so the same
+/// options can be reused across every skill of a repository.
+#[derive(Debug, Clone)]
+pub struct ValidationOptions {
+    allowed_fields: HashSet<String>,
+    ignore_files: globset::GlobSet,
+    scan_extensions: Vec<String>,
+}
+
+impl ValidationOptions {
+    /// Build options from already-resolved components.
+    ///
+    /// Crate-internal by design: callers go through the configuration resolver
+    /// so glob patterns and extensions are normalized in one place.
+    pub(crate) fn new(
+        allowed_fields: HashSet<String>,
+        ignore_files: globset::GlobSet,
+        scan_extensions: Vec<String>,
+    ) -> Self {
+        Self {
+            allowed_fields,
+            ignore_files,
+            scan_extensions,
+        }
+    }
+
+    /// Whether `path` matches one of the configured `ignore_files` patterns.
+    pub fn is_ignored(&self, path: &Path) -> bool {
+        !self.ignore_files.is_empty() && self.ignore_files.is_match(path)
+    }
+
+    /// Whether the contents of `path` may be scanned for reference syntax.
+    ///
+    /// Only files whose extension is listed in `scan_extensions` are scanned.
+    /// Extensions are matched case-insensitively.
+    pub fn is_scannable(&self, path: &Path) -> bool {
+        match extension_of(path) {
+            Some(ext) => self.scan_extensions.iter().any(|e| e == &ext),
+            None => false,
+        }
+    }
+
+    /// Whether a frontmatter key is accepted by these options.
+    pub fn allows_field(&self, field: &str) -> bool {
+        self.allowed_fields.contains(field)
+    }
+
+    /// Accepted frontmatter keys, sorted for stable diagnostics.
+    pub(crate) fn allowed_field_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.allowed_fields.iter().cloned().collect();
+        names.sort();
+        names
+    }
+}
+
+/// Lowercased extension of `path` including the leading dot.
+fn extension_of(path: &Path) -> Option<String> {
+    let ext = path.extension().and_then(|e| e.to_str())?;
+    if ext.is_empty() {
+        return None;
+    }
+    Some(format!(".{}", ext.to_lowercase()))
+}
 
 /// Properties parsed from a skill's SKILL.md frontmatter.
 ///

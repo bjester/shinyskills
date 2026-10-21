@@ -339,7 +339,12 @@ pub fn is_path_referenced(body: &str, rel_path: &Path) -> ReferenceStatus {
     for caps in re.captures_iter(&normalized_body) {
         let candidate = caps.get(1).map(|m| m.as_str()).unwrap_or("");
 
-        if candidate == path_str_posix {
+        // Writers commonly prefix skill-relative paths with one or more `./`
+        // segments. Those are equivalent to the plain relative path, so they
+        // must not be reported as broken references.
+        let candidate_clean = candidate.trim_start_matches("./");
+
+        if candidate_clean == path_str_posix {
             found_correct = true;
         } else {
             has_broken_path = true;
