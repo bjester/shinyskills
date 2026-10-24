@@ -314,10 +314,7 @@ fn main() {
 
             match read_properties(&skill_path) {
                 Ok(props) => {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&props.to_dict()).unwrap()
-                    );
+                    println!("{}", serde_json::to_string_pretty(&props.to_map()).unwrap());
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);
