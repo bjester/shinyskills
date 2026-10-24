@@ -4,9 +4,6 @@ A validation tool for Agent Skills (Rust port of the reference library [agentski
 
 This CLI utility is designed to validate LLM agent skills (their directories), checking for proper structure, required fields, and file references. Additionally, it provides a `validate-staged` subcommand intended for pre-commit hooks.
 
-> [!NOTE]
-> This was vibe coded. Happy to have Rust engineers get involved!
-
 ## What's different
 
 The `skills-ref` tool is described as only a demonstration and reference library. They aren't accepting contributions there at this time. 
@@ -69,6 +66,31 @@ cargo run -- read-properties /path/to/skill-directory
 cargo run -- to-prompt /path/to/skill1 /path/to/skill2
 ```
 
+### Use as a library
+
+The same checks are open to Rust callers. `validate` returns a `ValidationReport`, where errors decide validity and warnings do not.
+
+```rust
+use shinyskills::{parser, validator, ValidationMode};
+
+let report = validator::validate(&skill_dir, ValidationMode::Default);
+for warning in &report.warnings {
+    println!("warning: {warning}");
+}
+if !report.is_valid() {
+    for error in &report.errors {
+        println!("error: {error}");
+    }
+}
+
+match parser::read_properties(&skill_dir) {
+    Ok(properties) => println!("{:?}", properties.to_map()),
+    Err(e) => eprintln!("could not read properties: {e}"),
+}
+```
+
+Callers that resolve repository configuration call `validator::validate_with_options` with `ValidationOptions` from `config::resolve_validation_options`.
+
 ## Repository Configuration
 
 ShinySkills reads one configuration file: `.shinyskills.toml` in the repository root. It finds that root by walking up from the skill directory until it sees `.git`. A `.git` file, used by worktrees, also counts. Files in skill directories or other subfolders are ignored on purpose. When no file exists, ShinySkills uses built-in defaults and validation behaves as before.
@@ -107,7 +129,7 @@ Add to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/yourusername/shinyskills
-    rev: v0.1.0  # Use the git tag you want
+    rev: v0.2.0  # Use the git tag you want
     hooks:
       - id: shinyskills-validate
         # Optional: limit search to your project directory
@@ -124,33 +146,47 @@ The hook will:
 
 ## Development
 
+Rust code has been aligned to [Google's Rust Style Guide](https://google.github.io/styleguide/rustguide.html).
+
+Run what CI runs:
+
 ```bash
-# Build
-cargo build
+# Format
+cargo fmt --all
+cargo fmt --all -- --check
 
-# Run tests
-cargo test
+# Lint, where any warning fails the run
+cargo clippy --all-targets --all-features -- -D warnings
 
-# Format code
-cargo fmt
+# Tests
+cargo test --all-features
 
-# Lint code
-cargo clippy
+# Documentation, where a broken doc fails the run
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 ```
+
+The rules live in the repository, not in a recipe, so local runs report what CI will report:
+
+- `rustfmt.toml` sets the line width to 100 columns.
+- `Cargo.toml` forbids `unsafe` code and warns on missing documentation for public items.
+- `Cargo.toml` also warns on `unwrap()` outside tests, so run `cargo clippy` to see it.
 
 ## Structure
 
 - `src/main.rs` - CLI entry point
-- `src/lib.rs` - Library root
+- `src/lib.rs` - Library root and public re-exports
+- `src/config.rs` - `.shinyskills.toml` discovery and resolution
 - `src/errors.rs` - Custom error types
-- `src/models.rs` - Data models (SkillProperties)
+- `src/models.rs` - Data models (`ValidationReport`, `ParsedFrontmatter`, `SkillProperties`, `ValidationOptions`, `ValidationMode`)
 - `src/parser.rs` - YAML frontmatter parsing and file scanning
 - `src/validator.rs` - Validation logic
 - `src/prompt.rs` - XML prompt generation
 
 ## AI Disclosure
 
-I'm not a Rust developer, but I was keen to port the tool to Rust because of its speed benefits, particularly for pre-commit integration. I used Qwen3.5-122B to complete most of the port, then Kimi-k2.5 to do review and set up pre-commit integration with new `validate-staged` subcommand.
+I'm not a Rust developer, but I was keen to port the tool to Rust because of its speed benefits, particularly for pre-commit integration. In the initial port, I used Qwen3.5-122B to complete most of it, then Kimi-k2.5 to do review and set up pre-commit integration with new `validate-staged` subcommand. Since then, I've used other frontier models to create specifications and implementation plans, and have implemented those with local models.
+
+Happy to have actual Rust engineers involved!
 
 
 ## License & Attribution

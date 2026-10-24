@@ -1,12 +1,14 @@
+//! End-to-end checks for the shinyskills library and command line interface.
+#![allow(clippy::unwrap_used)]
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use tempfile::TempDir;
 
-use shinyskills::parser::{
-    find_skill_dir_for_file, find_skill_md, is_path_referenced, ReferenceStatus,
-};
-use shinyskills::prompt::to_prompt;
-use shinyskills::validator::{validate, validate_with_options, ValidationMode};
+use shinyskills::models::ValidationMode;
+use shinyskills::parser::ReferenceStatus;
+use shinyskills::ValidationReport;
+use shinyskills::{config, parser, prompt, validator};
 
 fn create_valid_skill(dir: &TempDir) -> PathBuf {
     let skill_dir = dir.path().join("my-skill");
@@ -31,7 +33,9 @@ fn test_valid_skill() {
     let tmp_dir = TempDir::new().unwrap();
     let skill_dir = create_valid_skill(&tmp_dir);
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -41,7 +45,9 @@ fn test_nonexistent_path() {
     let tmp_dir = TempDir::new().unwrap();
     let path = tmp_dir.path().join("nonexistent");
 
-    let (warnings, errors) = validate(&path, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&path, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert_eq!(errors.len(), 1);
     assert!(errors[0].contains("does not exist"));
@@ -53,7 +59,9 @@ fn test_not_a_directory() {
     let file_path = tmp_dir.path().join("file.txt");
     fs::write(&file_path, "test").unwrap();
 
-    let (warnings, errors) = validate(&file_path, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&file_path, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert_eq!(errors.len(), 1);
     assert!(errors[0].contains("Not a directory"));
@@ -65,7 +73,9 @@ fn test_missing_skill_md() {
     let skill_dir = tmp_dir.path().join("my-skill");
     fs::create_dir(&skill_dir).unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert_eq!(errors.len(), 1);
     assert!(errors[0].contains("Missing required file: SKILL.md"));
@@ -87,7 +97,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.iter().any(|e| e.contains("lowercase")));
 }
@@ -112,7 +124,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors
         .iter()
@@ -135,7 +149,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors
         .iter()
@@ -158,7 +174,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.iter().any(|e| e.contains("consecutive hyphens")));
 }
@@ -179,7 +197,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.iter().any(|e| e.contains("invalid characters")));
 }
@@ -200,7 +220,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.iter().any(|e| e.contains("must match skill name")));
 }
@@ -222,7 +244,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.iter().any(|e| e.contains("Unexpected fields")));
 }
@@ -246,7 +270,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -293,7 +319,9 @@ using write-capable tools. Validate exported JSON with
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -315,7 +343,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -336,7 +366,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -357,7 +389,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -378,7 +412,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -399,7 +435,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.iter().any(|e| e.contains("lowercase")));
 }
@@ -424,7 +462,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors
         .iter()
@@ -448,7 +488,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -474,7 +516,9 @@ Body
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors
         .iter()
@@ -506,7 +550,9 @@ See [the guide](references/GUIDE.md) and run `scripts/run.py`.
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -533,7 +579,9 @@ See [the guide](references/GUIDE.md) for details.
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("Orphaned file"));
     assert!(warnings[0].contains("references/UNUSED.md"));
@@ -566,7 +614,9 @@ No file references here.
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert_eq!(warnings.len(), 3);
     assert!(warnings.iter().any(|w| w.contains("UNUSED1.md")));
     assert!(warnings.iter().any(|w| w.contains("UNUSED2.md")));
@@ -597,7 +647,9 @@ This is just an example, the files don't need to exist.
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -621,7 +673,9 @@ No file references.
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -647,7 +701,9 @@ No file references.
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -680,7 +736,9 @@ Read [the index](references/INDEX.md).
     )
     .unwrap();
 
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("UNUSED.md"));
     assert!(!warnings[0].contains("GUIDE.md"));
@@ -695,16 +753,16 @@ fn test_find_skill_md() {
 
     // Test with SKILL.md
     fs::write(skill_dir.join("SKILL.md"), "---\nname: test\n---\nBody").unwrap();
-    assert!(find_skill_md(&skill_dir).is_some());
+    assert!(parser::find_skill_md(&skill_dir).is_some());
 
     // Test with skill.md
     fs::remove_file(skill_dir.join("SKILL.md")).unwrap();
     fs::write(skill_dir.join("skill.md"), "---\nname: test\n---\nBody").unwrap();
-    assert!(find_skill_md(&skill_dir).is_some());
+    assert!(parser::find_skill_md(&skill_dir).is_some());
 
     // Test with neither
     fs::remove_file(skill_dir.join("skill.md")).unwrap();
-    assert!(find_skill_md(&skill_dir).is_none());
+    assert!(parser::find_skill_md(&skill_dir).is_none());
 }
 
 #[test]
@@ -712,7 +770,10 @@ fn test_is_path_referenced_found() {
     let body = "See [the guide](references/GUIDE.md) for details.";
     let path = PathBuf::from("references/GUIDE.md");
 
-    assert_eq!(is_path_referenced(body, &path), ReferenceStatus::Found);
+    assert_eq!(
+        parser::is_path_referenced(body, &path),
+        ReferenceStatus::Found
+    );
 }
 
 #[test]
@@ -720,7 +781,10 @@ fn test_is_path_referenced_orphaned() {
     let body = "No references here.";
     let path = PathBuf::from("references/GUIDE.md");
 
-    assert_eq!(is_path_referenced(body, &path), ReferenceStatus::Orphaned);
+    assert_eq!(
+        parser::is_path_referenced(body, &path),
+        ReferenceStatus::Orphaned
+    );
 }
 
 #[test]
@@ -728,7 +792,10 @@ fn test_is_path_referenced_broken_path() {
     let body = "See docs/GUIDE.md for details.";
     let path = PathBuf::from("references/GUIDE.md");
 
-    assert_eq!(is_path_referenced(body, &path), ReferenceStatus::BrokenPath);
+    assert_eq!(
+        parser::is_path_referenced(body, &path),
+        ReferenceStatus::BrokenPath
+    );
 }
 
 #[test]
@@ -736,7 +803,10 @@ fn test_is_path_referenced_backslash_normalized() {
     let body = "See references\\GUIDE.md for details.";
     let path = PathBuf::from("references/GUIDE.md");
 
-    assert_eq!(is_path_referenced(body, &path), ReferenceStatus::Found);
+    assert_eq!(
+        parser::is_path_referenced(body, &path),
+        ReferenceStatus::Found
+    );
 }
 
 #[test]
@@ -746,21 +816,21 @@ fn test_is_path_referenced_leading_dot_slash() {
     // Relative forms are the idiomatic way to refer to skill assets.
     let backtick = "Run `./scripts/find-polluter.sh` first.";
     assert_eq!(
-        is_path_referenced(backtick, &path),
+        parser::is_path_referenced(backtick, &path),
         ReferenceStatus::Found,
         "`./` prefix must normalize away"
     );
 
     let link = "[Run](././scripts/find-polluter.sh)";
     assert_eq!(
-        is_path_referenced(link, &path),
+        parser::is_path_referenced(link, &path),
         ReferenceStatus::Found,
         "repeated `./` prefixes must normalize away"
     );
 
     let windows = "Run .\\scripts\\find-polluter.sh once.";
     assert_eq!(
-        is_path_referenced(windows, &path),
+        parser::is_path_referenced(windows, &path),
         ReferenceStatus::Found,
         "Windows-style `./` separators must normalize away"
     );
@@ -768,7 +838,7 @@ fn test_is_path_referenced_leading_dot_slash() {
 
 #[test]
 fn test_to_prompt_empty() {
-    let result = to_prompt(&[]);
+    let result = prompt::to_prompt(&[]);
     assert_eq!(result, "<available_skills>\n</available_skills>");
 }
 
@@ -788,7 +858,7 @@ Body
     )
     .unwrap();
 
-    let result = to_prompt(&[&skill_dir]);
+    let result = prompt::to_prompt(&[&skill_dir]);
     assert!(result.contains("<available_skills>"));
     assert!(result.contains("<skill>"));
     assert!(result.contains("<name>my-skill</name>"));
@@ -812,7 +882,7 @@ Body
     )
     .unwrap();
 
-    let result = to_prompt(&[&skill_dir]);
+    let result = prompt::to_prompt(&[&skill_dir]);
     assert!(result.contains("&lt;special&gt;"));
     assert!(result.contains("&amp;"));
     assert!(result.contains("&quot;quoted&quot;"));
@@ -829,7 +899,7 @@ fn test_find_skill_dir_for_file_in_skill_root() {
     let file_path = skill_dir.join("script.py");
     fs::write(&file_path, "# script").unwrap();
 
-    let result = find_skill_dir_for_file(&file_path, None, 3);
+    let result = parser::find_skill_dir_for_file(&file_path, None, 3);
     assert_eq!(result, Some(skill_dir));
 }
 
@@ -845,7 +915,7 @@ fn test_find_skill_dir_for_file_in_subdir() {
     let file_path = scripts_dir.join("run.py");
     fs::write(&file_path, "# script").unwrap();
 
-    let result = find_skill_dir_for_file(&file_path, None, 3);
+    let result = parser::find_skill_dir_for_file(&file_path, None, 3);
     assert_eq!(result, Some(skill_dir));
 }
 
@@ -859,7 +929,7 @@ fn test_find_skill_dir_for_file_not_in_skill() {
     fs::write(&file_path, "content").unwrap();
 
     // No SKILL.md anywhere
-    let result = find_skill_dir_for_file(&file_path, None, 3);
+    let result = parser::find_skill_dir_for_file(&file_path, None, 3);
     assert_eq!(result, None);
 }
 
@@ -877,13 +947,13 @@ fn test_find_skill_dir_for_file_with_context_dir() {
     fs::write(&file_path, "# script").unwrap();
 
     // With context_dir set to project, should find it (walking up from scripts/ to my-skill/)
-    let result = find_skill_dir_for_file(&file_path, Some(&project_dir), 3);
+    let result = parser::find_skill_dir_for_file(&file_path, Some(&project_dir), 3);
     assert_eq!(result, Some(skill_dir));
 
     // With context_dir set to a subdirectory that doesn't contain the skill,
     // should not find it because we'd have to walk outside the context
     let deep_context = project_dir.join("my-skill").join("scripts");
-    let result = find_skill_dir_for_file(&file_path, Some(&deep_context), 3);
+    let result = parser::find_skill_dir_for_file(&file_path, Some(&deep_context), 3);
     // The file is in scripts/, and we check if scripts/ has SKILL.md (no)
     // Then we check if my-skill/ has SKILL.md (yes), but my-skill/ is outside deep_context
     // So we should NOT find it
@@ -902,11 +972,11 @@ fn test_find_skill_dir_for_file_with_max_depth() {
     fs::write(&file_path, "# script").unwrap();
 
     // With max_depth=3, should find it (3 levels up from file: level3->level2->level1->skill_dir)
-    let result = find_skill_dir_for_file(&file_path, None, 3);
+    let result = parser::find_skill_dir_for_file(&file_path, None, 3);
     assert_eq!(result, Some(skill_dir));
 
     // With max_depth=2, should NOT find it (needs 3 levels)
-    let result = find_skill_dir_for_file(&file_path, None, 2);
+    let result = parser::find_skill_dir_for_file(&file_path, None, 2);
     assert_eq!(result, None);
 }
 
@@ -922,7 +992,7 @@ fn test_find_skill_dir_for_file_max_depth_zero() {
     fs::write(&file_path, "# script").unwrap();
 
     // Should still find it because we check the file's directory first (depth 0)
-    let result = find_skill_dir_for_file(&file_path, None, 0);
+    let result = parser::find_skill_dir_for_file(&file_path, None, 0);
     assert_eq!(result, Some(skill_dir.clone()));
 
     // File in subdirectory with max_depth=0
@@ -932,7 +1002,7 @@ fn test_find_skill_dir_for_file_max_depth_zero() {
     fs::write(&subfile, "# script").unwrap();
 
     // Should NOT find it because we'd need to walk up at least 1 level
-    let result = find_skill_dir_for_file(&subfile, None, 0);
+    let result = parser::find_skill_dir_for_file(&subfile, None, 0);
     assert_eq!(result, None);
 }
 
@@ -966,15 +1036,17 @@ See [guide](references/GUIDE.md) and run `scripts/run.py`.
     let file1 = refs_dir.join("GUIDE.md");
     let file2 = scripts_dir.join("run.py");
 
-    let skill_dir1 = find_skill_dir_for_file(&file1, None, 3);
-    let skill_dir2 = find_skill_dir_for_file(&file2, None, 3);
+    let skill_dir1 = parser::find_skill_dir_for_file(&file1, None, 3);
+    let skill_dir2 = parser::find_skill_dir_for_file(&file2, None, 3);
 
     // Both should find the same skill directory
     assert_eq!(skill_dir1, skill_dir2);
     assert_eq!(skill_dir1, Some(skill_dir.clone()));
 
     // Validate the skill once (simulating deduplication)
-    let (warnings, errors) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(warnings.is_empty());
     assert!(errors.is_empty());
 }
@@ -1017,8 +1089,8 @@ Body
     fs::write(&file1, "content").unwrap();
     fs::write(&file2, "content").unwrap();
 
-    let skill_dir1 = find_skill_dir_for_file(&file1, None, 3);
-    let skill_dir2 = find_skill_dir_for_file(&file2, None, 3);
+    let skill_dir1 = parser::find_skill_dir_for_file(&file1, None, 3);
+    let skill_dir2 = parser::find_skill_dir_for_file(&file2, None, 3);
 
     // Should find different skill directories
     assert_eq!(skill_dir1, Some(skill1_dir.clone()));
@@ -1026,8 +1098,12 @@ Body
     assert_ne!(skill_dir1, skill_dir2);
 
     // Both should validate successfully
-    let (_, errors1) = validate(&skill1_dir, ValidationMode::Default);
-    let (_, errors2) = validate(&skill2_dir, ValidationMode::Default);
+    let ValidationReport {
+        errors: errors1, ..
+    } = validator::validate(&skill1_dir, ValidationMode::Default);
+    let ValidationReport {
+        errors: errors2, ..
+    } = validator::validate(&skill2_dir, ValidationMode::Default);
     assert!(errors1.is_empty());
     assert!(errors2.is_empty());
 }
@@ -1052,11 +1128,17 @@ Body
     .unwrap();
 
     // Default mode should reject user-invocable
-    let (_, errors_default) = validate(&skill_dir, ValidationMode::Default);
+    let ValidationReport {
+        errors: errors_default,
+        ..
+    } = validator::validate(&skill_dir, ValidationMode::Default);
     assert!(errors_default.iter().any(|e| e.contains("user-invocable")));
 
     // Vibe mode should accept user-invocable
-    let (_, errors_vibe) = validate(&skill_dir, ValidationMode::Vibe);
+    let ValidationReport {
+        errors: errors_vibe,
+        ..
+    } = validator::validate(&skill_dir, ValidationMode::Vibe);
     assert!(!errors_vibe.iter().any(|e| e.contains("user-invocable")));
 }
 
@@ -1078,14 +1160,14 @@ fn test_validate_staged_with_context_dir() {
     fs::write(&file_path, "# script").unwrap();
 
     // With context_dir set to project, should find the skill
-    let result = find_skill_dir_for_file(&file_path, Some(&project_dir), 3);
+    let result = parser::find_skill_dir_for_file(&file_path, Some(&project_dir), 3);
     assert_eq!(result, Some(skill_dir));
 
     // With context_dir set to a directory that doesn't contain the skill,
     // should not find it
     let outside_dir = tmp_dir.path().join("outside");
     fs::create_dir(&outside_dir).unwrap();
-    let result = find_skill_dir_for_file(&file_path, Some(&outside_dir), 3);
+    let result = parser::find_skill_dir_for_file(&file_path, Some(&outside_dir), 3);
     assert_eq!(result, None);
 }
 
@@ -1132,12 +1214,13 @@ Run `./scripts/run.sh`, then see [the harness](tests/run.test.cjs).
         "[validation]\nignore_files = [\"CHANGELOG.md\"]\nscan_extensions = [\".md\"]\n",
     )
     .unwrap();
-    let config = shinyskills::config::load_config(&config_path).unwrap();
+    let config = config::load_config(&config_path).unwrap();
     let options =
-        shinyskills::config::resolve_validation_options(Some(&config), ValidationMode::Default)
-            .unwrap();
+        config::resolve_validation_options(Some(&config), ValidationMode::Default).unwrap();
 
-    let (warnings, errors) = validate_with_options(&skill_dir, &options);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate_with_options(&skill_dir, &options);
 
     assert_eq!(warnings, Vec::<String>::new(), "got: {:?}", warnings);
     assert_eq!(errors, Vec::<String>::new(), "got: {:?}", errors);
@@ -1164,9 +1247,10 @@ fn test_non_scannable_file_contents_do_not_resolve_orphans() {
     .unwrap();
     fs::write(assets_dir.join("orphan.txt"), "orphan\n").unwrap();
 
-    let options =
-        shinyskills::config::resolve_validation_options(None, ValidationMode::Default).unwrap();
-    let (warnings, errors) = validate_with_options(&skill_dir, &options);
+    let options = config::resolve_validation_options(None, ValidationMode::Default).unwrap();
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate_with_options(&skill_dir, &options);
 
     assert!(errors.is_empty(), "errors: {:?}", errors);
     assert_eq!(
@@ -1180,13 +1264,13 @@ fn test_non_scannable_file_contents_do_not_resolve_orphans() {
 // ---------------------------------------------------------------------------
 
 /// Create `<dir>/.git` so the directory is recognised as a repository root.
-fn make_git_repo(dir: &std::path::Path) {
+fn make_git_repo(dir: &Path) {
     fs::create_dir_all(dir.join(".git")).unwrap();
 }
 
 /// Write a skill whose frontmatter carries an extra `user-invocable` field and
 /// whose only extra file is a maintenance changelog nothing references.
-fn write_vibe_skill(skill_dir: &std::path::Path) {
+fn write_vibe_skill(skill_dir: &Path) {
     fs::create_dir_all(skill_dir).unwrap();
     fs::write(
         skill_dir.join("SKILL.md"),
@@ -1202,15 +1286,15 @@ Nothing references the changelog.
     fs::write(skill_dir.join("CHANGELOG.md"), "# Changelog\n").unwrap();
 }
 
-fn run_cli(args: &[&std::path::Path]) -> std::process::Output {
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_shinyskills"));
+fn run_cli(args: &[&Path]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shinyskills"));
     for arg in args {
-        cmd.arg(arg);
+        command.arg(arg);
     }
-    cmd.output().unwrap()
+    command.output().unwrap()
 }
 
-fn stderr_of(output: &std::process::Output) -> String {
+fn stderr_of(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
 }
 
@@ -1240,13 +1324,13 @@ fn cli_validate_uses_repository_root_config_and_ignores_nested() {
     )
     .unwrap();
 
-    let output = run_cli(&[std::path::Path::new("validate"), &skill_dir]);
+    let output = run_cli(&[Path::new("validate"), &skill_dir]);
     assert!(output.status.success(), "stderr: {}", stderr_of(&output));
 
     // With the root configuration removed, the nested files still do not count,
     // so the extra field is rejected again.
     fs::remove_file(repo.join(".shinyskills.toml")).unwrap();
-    let output = run_cli(&[std::path::Path::new("validate"), &skill_dir]);
+    let output = run_cli(&[Path::new("validate"), &skill_dir]);
     assert!(!output.status.success());
     assert!(stderr_of(&output).contains("user-invocable"));
 }
@@ -1267,9 +1351,9 @@ fn cli_validate_config_flag_overrides_discovery() {
     .unwrap();
 
     let output = run_cli(&[
-        std::path::Path::new("validate"),
+        Path::new("validate"),
         &skill_dir,
-        std::path::Path::new("--config"),
+        Path::new("--config"),
         &config_path,
     ]);
     assert!(output.status.success(), "stderr: {}", stderr_of(&output));
@@ -1290,9 +1374,9 @@ fn cli_validate_reports_missing_and_malformed_config() {
 
     let missing = tmp.path().join("absent.toml");
     let output = run_cli(&[
-        std::path::Path::new("validate"),
+        Path::new("validate"),
         &skill_dir,
-        std::path::Path::new("--config"),
+        Path::new("--config"),
         &missing,
     ]);
     assert_eq!(output.status.code(), Some(1));
@@ -1302,9 +1386,9 @@ fn cli_validate_reports_missing_and_malformed_config() {
     let malformed = tmp.path().join("broken.toml");
     fs::write(&malformed, "not = valid = toml\n").unwrap();
     let output = run_cli(&[
-        std::path::Path::new("validate"),
+        Path::new("validate"),
         &skill_dir,
-        std::path::Path::new("--config"),
+        Path::new("--config"),
         &malformed,
     ]);
     assert_eq!(output.status.code(), Some(1));
@@ -1318,8 +1402,8 @@ fn cli_validate_staged_rejects_missing_explicit_config_without_files() {
     let missing = tmp.path().join("absent.toml");
 
     let output = run_cli(&[
-        std::path::Path::new("validate-staged"),
-        std::path::Path::new("--config"),
+        Path::new("validate-staged"),
+        Path::new("--config"),
         &missing,
     ]);
 
@@ -1343,7 +1427,7 @@ fn cli_validate_warns_about_unreferenced_changelog_without_config() {
     .unwrap();
     fs::write(skill_dir.join("CHANGELOG.md"), "# Changelog\n").unwrap();
 
-    let output = run_cli(&[std::path::Path::new("validate"), &skill_dir]);
+    let output = run_cli(&[Path::new("validate"), &skill_dir]);
     assert!(output.status.success());
     let stderr = stderr_of(&output);
     assert!(
@@ -1358,7 +1442,7 @@ fn cli_validate_warns_about_unreferenced_changelog_without_config() {
         "[validation]\nignore_files = [\"CHANGELOG.md\"]\n",
     )
     .unwrap();
-    let output = run_cli(&[std::path::Path::new("validate"), &skill_dir]);
+    let output = run_cli(&[Path::new("validate"), &skill_dir]);
     assert!(output.status.success());
     assert!(
         stderr_of(&output).is_empty(),
@@ -1392,11 +1476,7 @@ fn cli_validate_staged_resolves_root_config_once_and_ignores_nested() {
     let changed_b = skill_b.join("SKILL.md");
 
     // No configuration: both skills report the unreferenced changelog.
-    let output = run_cli(&[
-        std::path::Path::new("validate-staged"),
-        &changed_a,
-        &changed_b,
-    ]);
+    let output = run_cli(&[Path::new("validate-staged"), &changed_a, &changed_b]);
     assert!(!output.status.success() || !stderr_of(&output).is_empty());
     let stderr = stderr_of(&output);
     assert!(stderr.contains("skill-a"), "stderr: {}", stderr);
@@ -1408,11 +1488,7 @@ fn cli_validate_staged_resolves_root_config_once_and_ignores_nested() {
         "[validation]\nignore_files = [\"CHANGELOG.md\"]\n",
     )
     .unwrap();
-    let output = run_cli(&[
-        std::path::Path::new("validate-staged"),
-        &changed_a,
-        &changed_b,
-    ]);
+    let output = run_cli(&[Path::new("validate-staged"), &changed_a, &changed_b]);
     assert!(output.status.success(), "stderr: {}", stderr_of(&output));
     assert!(
         stderr_of(&output).is_empty(),
@@ -1439,9 +1515,8 @@ Body text.
     .unwrap();
 
     // Baseline options reject the field.
-    let baseline =
-        shinyskills::config::resolve_validation_options(None, ValidationMode::Default).unwrap();
-    let (_, errors) = validate_with_options(&skill_dir, &baseline);
+    let baseline = config::resolve_validation_options(None, ValidationMode::Default).unwrap();
+    let ValidationReport { errors, .. } = validator::validate_with_options(&skill_dir, &baseline);
     assert!(
         errors.iter().any(|e| e.contains("user-invocable")),
         "errors: {:?}",
@@ -1455,12 +1530,13 @@ Body text.
         "[validation]\nallowed_fields = [\"name\", \"description\", \"user-invocable\"]\n",
     )
     .unwrap();
-    let config = shinyskills::config::load_config(&config_path).unwrap();
+    let config = config::load_config(&config_path).unwrap();
     let options =
-        shinyskills::config::resolve_validation_options(Some(&config), ValidationMode::Default)
-            .unwrap();
+        config::resolve_validation_options(Some(&config), ValidationMode::Default).unwrap();
 
-    let (warnings, errors) = validate_with_options(&skill_dir, &options);
+    let ValidationReport {
+        warnings, errors, ..
+    } = validator::validate_with_options(&skill_dir, &options);
     assert_eq!(warnings, Vec::<String>::new(), "got: {:?}", warnings);
     assert_eq!(errors, Vec::<String>::new(), "got: {:?}", errors);
 }
@@ -1482,9 +1558,9 @@ fn cli_validate_reports_invalid_ignore_glob() {
     fs::write(&bad_config, "[validation]\nignore_files = [\"[\"]\n").unwrap();
 
     let output = run_cli(&[
-        std::path::Path::new("validate"),
+        Path::new("validate"),
         &skill_dir,
-        std::path::Path::new("--config"),
+        Path::new("--config"),
         &bad_config,
     ]);
     assert_eq!(output.status.code(), Some(1));
@@ -1525,7 +1601,7 @@ fn cli_validate_staged_ignores_nested_config_files() {
     }
 
     let output = run_cli(&[
-        std::path::Path::new("validate-staged"),
+        Path::new("validate-staged"),
         &skill_a.join("SKILL.md"),
         &skill_b.join("SKILL.md"),
     ]);

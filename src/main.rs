@@ -2,19 +2,16 @@
 // SPDX-License-Identifier: MIT
 //
 // Derived from agentskills/skills-ref (Apache-2.0)
+//! Command-line interface for validating and describing Agent Skills.
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
-use shinyskills::config::{
-    find_repository_config, find_repository_root, load_config, resolve_validation_options,
-    CONFIG_FILE_NAME,
-};
+use shinyskills::config::CONFIG_FILE_NAME;
 use shinyskills::errors::SkillError;
-use shinyskills::parser::{find_skill_dir_for_file, read_properties};
-use shinyskills::prompt::to_prompt;
-use shinyskills::validator::{validate_with_options, ValidationMode};
+use shinyskills::models::ValidationMode;
 use shinyskills::ValidationOptions;
+use shinyskills::{config, parser, prompt, validator};
 
 #[derive(Parser)]
 #[command(name = "shinyskills")]
@@ -76,7 +73,7 @@ enum Commands {
     },
 }
 
-fn is_skill_md_file(path: &std::path::Path) -> bool {
+fn is_skill_md_file(path: &Path) -> bool {
     path.is_file()
         && path
             .file_name()
@@ -94,20 +91,20 @@ fn is_skill_md_file(path: &std::path::Path) -> bool {
 /// existed.
 fn resolve_options_for_path(
     skill_dir: &Path,
-    config: Option<&PathBuf>,
+    config: Option<&Path>,
     mode: ValidationMode,
 ) -> Result<ValidationOptions, SkillError> {
     if let Some(explicit_path) = config {
-        let loaded = load_config(explicit_path)?;
-        return resolve_validation_options(Some(&loaded), mode);
+        let loaded = config::load_config(explicit_path)?;
+        return config::resolve_validation_options(Some(&loaded), mode);
     }
 
-    match find_repository_config(skill_dir) {
+    match config::find_repository_config(skill_dir) {
         Some(discovered) => {
-            let loaded = load_config(&discovered)?;
-            resolve_validation_options(Some(&loaded), mode)
+            let loaded = config::load_config(&discovered)?;
+            config::resolve_validation_options(Some(&loaded), mode)
         }
-        None => resolve_validation_options(None, mode),
+        None => config::resolve_validation_options(None, mode),
     }
 }
 
@@ -121,11 +118,11 @@ struct OptionsCache {
 
 impl OptionsCache {
     /// Build a cache from an optional explicit configuration.
-    fn new(config: Option<&PathBuf>, mode: ValidationMode) -> Result<Self, SkillError> {
+    fn new(config: Option<&Path>, mode: ValidationMode) -> Result<Self, SkillError> {
         let explicit = match config {
             Some(path) => {
-                let loaded = load_config(path)?;
-                Some(resolve_validation_options(Some(&loaded), mode)?)
+                let loaded = config::load_config(path)?;
+                Some(config::resolve_validation_options(Some(&loaded), mode)?)
             }
             None => None,
         };
@@ -143,7 +140,7 @@ impl OptionsCache {
             return Ok(options.clone());
         }
 
-        let root = find_repository_root(skill_dir);
+        let root = config::find_repository_root(skill_dir);
         if let Some(options) = self.by_root.get(&root) {
             return Ok(options.clone());
         }
@@ -151,10 +148,10 @@ impl OptionsCache {
         // The root is already resolved above, so derive the configuration path
         // from it instead of walking for `.git` a second time.
         let loaded = match root.as_ref().map(|root| root.join(CONFIG_FILE_NAME)) {
-            Some(path) if path.is_file() => Some(load_config(&path)?),
+            Some(path) if path.is_file() => Some(config::load_config(&path)?),
             _ => None,
         };
-        let options = resolve_validation_options(loaded.as_ref(), self.mode)?;
+        let options = config::resolve_validation_options(loaded.as_ref(), self.mode)?;
         self.by_root.insert(root, options.clone());
         Ok(options)
     }
@@ -184,25 +181,25 @@ fn main() {
                 ValidationMode::Default
             };
 
-            let options = match resolve_options_for_path(&skill_path, config.as_ref(), mode) {
+            let options = match resolve_options_for_path(&skill_path, config.as_deref(), mode) {
                 Ok(options) => options,
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
             };
-            let (warnings, errors) = validate_with_options(&skill_path, &options);
+            let report = validator::validate_with_options(&skill_path, &options);
 
-            if !warnings.is_empty() {
+            if !report.warnings.is_empty() {
                 eprintln!("Validation warnings for {}:", skill_path.display());
-                for warning in warnings {
+                for warning in &report.warnings {
                     eprintln!("  - {}", warning);
                 }
             }
 
-            if !errors.is_empty() {
+            if !report.errors.is_empty() {
                 eprintln!("Validation failed for {}:", skill_path.display());
-                for error in errors {
+                for error in &report.errors {
                     eprintln!("  - {}", error);
                 }
                 std::process::exit(1);
@@ -224,7 +221,7 @@ fn main() {
                 ValidationMode::Default
             };
 
-            let mut cache = match OptionsCache::new(config.as_ref(), mode) {
+            let mut cache = match OptionsCache::new(config.as_deref(), mode) {
                 Ok(cache) => cache,
                 Err(e) => {
                     eprintln!("Error: {}", e);
@@ -241,7 +238,7 @@ fn main() {
             let mut skill_dirs: BTreeSet<PathBuf> = BTreeSet::new();
             for file in &files {
                 if let Some(skill_dir) =
-                    find_skill_dir_for_file(file, context_dir.as_deref(), max_depth)
+                    parser::find_skill_dir_for_file(file, context_dir.as_deref(), max_depth)
                 {
                     skill_dirs.insert(skill_dir);
                 }
@@ -264,18 +261,18 @@ fn main() {
                         std::process::exit(1);
                     }
                 };
-                let (warnings, errors) = validate_with_options(skill_dir, &options);
+                let report = validator::validate_with_options(skill_dir, &options);
 
                 // Prefix with skill name for clarity
                 let skill_name = skill_dir
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
-                for w in &warnings {
-                    total_warnings.push(format!("[{}] {}", skill_name, w));
+                for warning in &report.warnings {
+                    total_warnings.push(format!("[{}] {}", skill_name, warning));
                 }
-                for e in &errors {
-                    total_errors.push(format!("[{}] {}", skill_name, e));
+                for error in &report.errors {
+                    total_errors.push(format!("[{}] {}", skill_name, error));
                 }
             }
 
@@ -312,11 +309,12 @@ fn main() {
                 skill_path
             };
 
-            match read_properties(&skill_path) {
-                Ok(props) => {
+            match parser::read_properties(&skill_path) {
+                Ok(properties) => {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&props.to_dict()).unwrap()
+                        serde_json::to_string_pretty(&properties.to_map())
+                            .expect("SkillProperties map serializes to valid JSON")
                     );
                 }
                 Err(e) => {
@@ -340,9 +338,8 @@ fn main() {
                 }
             }
 
-            let path_refs: Vec<&std::path::Path> =
-                resolved_paths.iter().map(|p| p.as_path()).collect();
-            let output = to_prompt(&path_refs);
+            let path_refs: Vec<&Path> = resolved_paths.iter().map(|p| p.as_path()).collect();
+            let output = prompt::to_prompt(&path_refs);
             println!("{}", output);
         }
     }
