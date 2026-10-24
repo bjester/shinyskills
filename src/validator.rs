@@ -2,18 +2,20 @@
 // SPDX-License-Identifier: MIT
 //
 // Derived from agentskills/skills-ref (Apache-2.0)
+//! Validation rules for skill frontmatter metadata and file references.
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-use unicode_normalization::UnicodeNormalization;
 
+use serde_json::Value;
+
+use crate::config;
 use crate::models::{ParsedFrontmatter, ValidationOptions};
-use crate::parser::{
-    find_skill_md, is_path_referenced, parse_frontmatter, scan_skill_files, ReferenceStatus,
-};
+use crate::parser;
+use crate::parser::ReferenceStatus;
 
-// Re-exported so `shinyskills::validator::ValidationMode` keeps resolving.
-pub use crate::models::ValidationMode;
+pub use crate::models::{ValidationMode, ValidationReport};
 
 const MAX_SKILL_NAME_LENGTH: usize = 64;
 const MAX_DESCRIPTION_LENGTH: usize = 1024;
@@ -23,6 +25,8 @@ const MAX_COMPATIBILITY_LENGTH: usize = 500;
 const MAX_FILE_SIZE: u64 = 1024 * 1024;
 
 fn validate_name(name: &str, skill_dir: Option<&Path>) -> Vec<String> {
+    use unicode_normalization::UnicodeNormalization;
+
     let mut errors = Vec::new();
 
     if name.is_empty() {
@@ -30,7 +34,7 @@ fn validate_name(name: &str, skill_dir: Option<&Path>) -> Vec<String> {
         return errors;
     }
 
-    let normalized_name = name.nfkc().collect::<String>();
+    let normalized_name: String = name.nfkc().collect();
 
     if normalized_name.len() > MAX_SKILL_NAME_LENGTH {
         errors.push(format!(
@@ -69,7 +73,7 @@ fn validate_name(name: &str, skill_dir: Option<&Path>) -> Vec<String> {
 
     if let Some(skill_dir) = skill_dir {
         let dir_name = skill_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let normalized_dir_name = dir_name.nfkc().collect::<String>();
+        let normalized_dir_name: String = dir_name.nfkc().collect();
         if normalized_dir_name != normalized_name {
             errors.push(format!(
                 "Directory name '{}' must match skill name '{}'",
@@ -115,7 +119,7 @@ fn validate_compatibility(compatibility: &str) -> Vec<String> {
 }
 
 fn validate_metadata_fields(
-    metadata: &HashMap<String, serde_json::Value>,
+    metadata: &HashMap<String, Value>,
     options: &ValidationOptions,
 ) -> Vec<String> {
     let mut errors = Vec::new();
@@ -127,13 +131,10 @@ fn validate_metadata_fields(
     extra_fields.sort();
 
     if !extra_fields.is_empty() {
+        let extra_names: Vec<&str> = extra_fields.iter().map(|s| s.as_str()).collect();
         errors.push(format!(
             "Unexpected fields in frontmatter: {}. Only {:?} are allowed.",
-            extra_fields
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
+            extra_names.join(", "),
             options.allowed_field_names()
         ));
     }
@@ -153,8 +154,9 @@ fn validate_metadata_fields(
 ///
 /// # Returns
 /// List of validation error messages. Empty list means valid.
+#[must_use]
 pub fn validate_metadata_with_options(
-    metadata: &HashMap<String, serde_json::Value>,
+    metadata: &HashMap<String, Value>,
     skill_dir: Option<&Path>,
     options: &ValidationOptions,
 ) -> Vec<String> {
@@ -163,7 +165,7 @@ pub fn validate_metadata_with_options(
 
     // Validate name field
     match metadata.get("name") {
-        Some(serde_json::Value::String(name)) => {
+        Some(Value::String(name)) => {
             errors.extend(validate_name(name, skill_dir));
         }
         Some(_) => {
@@ -176,8 +178,8 @@ pub fn validate_metadata_with_options(
 
     // Validate description field
     match metadata.get("description") {
-        Some(serde_json::Value::String(desc)) => {
-            errors.extend(validate_description(desc));
+        Some(Value::String(description)) => {
+            errors.extend(validate_description(description));
         }
         Some(_) => {
             errors.push("Field 'description' must be a non-empty string".to_string());
@@ -188,8 +190,8 @@ pub fn validate_metadata_with_options(
     }
 
     // Validate optional compatibility field
-    if let Some(serde_json::Value::String(compat)) = metadata.get("compatibility") {
-        errors.extend(validate_compatibility(compat));
+    if let Some(Value::String(compatibility)) = metadata.get("compatibility") {
+        errors.extend(validate_compatibility(compatibility));
     }
 
     errors
@@ -200,12 +202,13 @@ pub fn validate_metadata_with_options(
 /// Kept for compatibility with callers that do not resolve configuration. It
 /// delegates to [`validate_metadata_with_options`] using the mode's built-in
 /// rules, which is what a run without any `.shinyskills.toml` produces.
+#[must_use]
 pub fn validate_metadata(
-    metadata: &HashMap<String, serde_json::Value>,
+    metadata: &HashMap<String, Value>,
     skill_dir: Option<&Path>,
     mode: ValidationMode,
 ) -> Vec<String> {
-    match crate::config::resolve_validation_options(None, mode) {
+    match config::resolve_validation_options(None, mode) {
         Ok(options) => validate_metadata_with_options(metadata, skill_dir, &options),
         Err(e) => vec![e.to_string()],
     }
@@ -220,20 +223,20 @@ fn track_reference_status(
     file_statuses: &mut HashMap<PathBuf, HashSet<ReferenceStatus>>,
     all_errors: &mut Vec<String>,
 ) {
-    for rel_path in files {
-        if rel_path == current_file {
+    for relative_path in files {
+        if relative_path == current_file {
             continue;
         }
-        let result = is_path_referenced(body, rel_path);
+        let status = parser::is_path_referenced(body, relative_path);
         file_statuses
-            .entry(rel_path.clone())
+            .entry(relative_path.clone())
             .or_default()
-            .insert(result);
-        if result == ReferenceStatus::BrokenPath {
+            .insert(status);
+        if status == ReferenceStatus::BrokenPath {
             all_errors.push(format!(
                 "File {} has broken path reference to: {}",
                 current_file.display(),
-                rel_path.display()
+                relative_path.display()
             ));
         }
     }
@@ -251,27 +254,29 @@ fn track_reference_status(
 /// * `options` - Resolved validation options for ignored and scannable files
 ///
 /// # Returns
-/// Tuple of (warnings, errors):
-/// - warnings: Files orphaned across all skill files
-/// - errors: Broken path references from any file
+/// Report whose warnings list files orphaned across all skill files and whose
+/// errors list broken path references from any file.
+///
+/// # Errors
+/// * io errors when the skill directory cannot be scanned
 pub fn validate_skill_references_with_options(
     skill_dir: &Path,
     body: &str,
     options: &ValidationOptions,
-) -> Result<(Vec<String>, Vec<String>), std::io::Error> {
-    let files: Vec<PathBuf> = scan_skill_files(skill_dir)?
+) -> Result<ValidationReport, io::Error> {
+    let files: Vec<PathBuf> = parser::scan_skill_files(skill_dir)?
         .into_iter()
-        .filter(|rel_path| !options.is_ignored(rel_path))
+        .filter(|relative_path| !options.is_ignored(relative_path))
         .collect();
 
     let mut file_statuses: HashMap<PathBuf, HashSet<ReferenceStatus>> = HashMap::new();
-    for f in &files {
-        file_statuses.insert(f.clone(), HashSet::new());
+    for file in &files {
+        file_statuses.insert(file.clone(), HashSet::new());
     }
 
     let mut all_errors: Vec<String> = Vec::new();
 
-    if let Some(skill_md) = find_skill_md(skill_dir) {
+    if let Some(skill_md) = parser::find_skill_md(skill_dir) {
         let current_file = PathBuf::from(
             skill_md
                 .file_name()
@@ -287,16 +292,16 @@ pub fn validate_skill_references_with_options(
         );
     }
 
-    for rel_path in &files {
-        if !options.is_scannable(rel_path) {
+    for relative_path in &files {
+        if !options.is_scannable(relative_path) {
             continue;
         }
 
-        let file_path = skill_dir.join(rel_path);
+        let file_path = skill_dir.join(relative_path);
 
         // Check file size before reading to prevent OOM
         let metadata = match fs::metadata(&file_path) {
-            Ok(m) => m,
+            Ok(metadata) => metadata,
             Err(_) => continue,
         };
 
@@ -311,7 +316,7 @@ pub fn validate_skill_references_with_options(
             }
             track_reference_status(
                 &files,
-                rel_path,
+                relative_path,
                 &content,
                 &mut file_statuses,
                 &mut all_errors,
@@ -319,21 +324,21 @@ pub fn validate_skill_references_with_options(
         }
     }
 
-    let mut all_warnings: Vec<String> = Vec::new();
-    for rel_path in &files {
-        if let Some(statuses) = file_statuses.get(rel_path) {
+    let mut reference_warnings: Vec<String> = Vec::new();
+    for relative_path in &files {
+        if let Some(statuses) = file_statuses.get(relative_path) {
             if !statuses.contains(&ReferenceStatus::Found)
                 && !statuses.contains(&ReferenceStatus::BrokenPath)
             {
-                all_warnings.push(format!(
+                reference_warnings.push(format!(
                     "Orphaned file (not referenced): {}",
-                    rel_path.display()
+                    relative_path.display()
                 ));
             }
         }
     }
 
-    Ok((all_warnings, all_errors))
+    Ok(ValidationReport::new(reference_warnings, all_errors))
 }
 
 /// Validate a skill directory with resolved options.
@@ -348,61 +353,47 @@ pub fn validate_skill_references_with_options(
 /// * `options` - Resolved validation options for this run
 ///
 /// # Returns
-/// Tuple of (warnings, errors):
-/// - warnings: Orphaned files (not referenced in any skill file)
-/// - errors: Validation errors (invalid metadata, broken paths)
-pub fn validate_with_options(
-    skill_dir: &Path,
-    options: &ValidationOptions,
-) -> (Vec<String>, Vec<String>) {
-    let skill_dir = PathBuf::from(skill_dir);
-
+/// Report whose warnings list orphaned files and whose errors list invalid
+/// metadata and broken paths.
+pub fn validate_with_options(skill_dir: &Path, options: &ValidationOptions) -> ValidationReport {
     if !skill_dir.exists() {
-        return (
-            Vec::new(),
-            vec![format!("Path does not exist: {}", skill_dir.display())],
-        );
+        return ValidationReport::single_error(format!(
+            "Path does not exist: {}",
+            skill_dir.display()
+        ));
     }
 
     if !skill_dir.is_dir() {
-        return (
-            Vec::new(),
-            vec![format!("Not a directory: {}", skill_dir.display())],
-        );
+        return ValidationReport::single_error(format!("Not a directory: {}", skill_dir.display()));
     }
 
-    let skill_md = match find_skill_md(&skill_dir) {
+    let skill_md = match parser::find_skill_md(skill_dir) {
         Some(path) => path,
         None => {
-            return (
-                Vec::new(),
-                vec!["Missing required file: SKILL.md".to_string()],
-            )
+            return ValidationReport::single_error("Missing required file: SKILL.md".to_string())
         }
     };
 
     let content = match fs::read_to_string(&skill_md) {
-        Ok(c) => c,
-        Err(e) => return (Vec::new(), vec![format!("Failed to read SKILL.md: {}", e)]),
-    };
-
-    let ParsedFrontmatter { metadata, body } = match parse_frontmatter(&content) {
-        Ok(parsed) => parsed,
-        Err(e) => return (Vec::new(), vec![e.to_string()]),
-    };
-
-    let errors = validate_metadata_with_options(&metadata, Some(&skill_dir), options);
-
-    match validate_skill_references_with_options(&skill_dir, &body, options) {
-        Ok((ref_warnings, ref_errors)) => {
-            let mut all_errors = errors;
-            all_errors.extend(ref_errors);
-            (ref_warnings, all_errors)
+        Ok(content) => content,
+        Err(e) => {
+            return ValidationReport::single_error(format!("Failed to read SKILL.md: {}", e));
         }
-        Err(e) => (
-            Vec::new(),
-            vec![format!("Error scanning skill files: {}", e)],
-        ),
+    };
+
+    let ParsedFrontmatter { metadata, body } = match parser::parse_frontmatter(&content) {
+        Ok(parsed) => parsed,
+        Err(e) => return ValidationReport::single_error(e.to_string()),
+    };
+
+    let mut errors = validate_metadata_with_options(&metadata, Some(skill_dir), options);
+
+    match validate_skill_references_with_options(skill_dir, &body, options) {
+        Ok(report) => {
+            errors.extend(report.errors);
+            ValidationReport::new(report.warnings, errors)
+        }
+        Err(e) => ValidationReport::single_error(format!("Error scanning skill files: {}", e)),
     }
 }
 
@@ -411,10 +402,10 @@ pub fn validate_with_options(
 /// Resolves the mode's built-in options and delegates to
 /// [`validate_with_options`]. Callers that have repository configuration should
 /// resolve options themselves so discovery happens once per repository.
-pub fn validate(skill_dir: &Path, mode: ValidationMode) -> (Vec<String>, Vec<String>) {
-    match crate::config::resolve_validation_options(None, mode) {
+pub fn validate(skill_dir: &Path, mode: ValidationMode) -> ValidationReport {
+    match config::resolve_validation_options(None, mode) {
         Ok(options) => validate_with_options(skill_dir, &options),
-        Err(e) => (Vec::new(), vec![e.to_string()]),
+        Err(e) => ValidationReport::single_error(e.to_string()),
     }
 }
 
@@ -425,10 +416,10 @@ pub fn validate(skill_dir: &Path, mode: ValidationMode) -> (Vec<String>, Vec<Str
 pub fn validate_skill_references(
     skill_dir: &Path,
     body: &str,
-) -> Result<(Vec<String>, Vec<String>), std::io::Error> {
-    let options = match crate::config::resolve_validation_options(None, ValidationMode::Default) {
+) -> Result<ValidationReport, io::Error> {
+    let options = match config::resolve_validation_options(None, ValidationMode::Default) {
         Ok(options) => options,
-        Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)),
+        Err(e) => return Err(io::Error::new(ErrorKind::InvalidInput, e)),
     };
     validate_skill_references_with_options(skill_dir, body, &options)
 }
