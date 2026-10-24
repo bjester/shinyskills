@@ -129,7 +129,7 @@ Add to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/yourusername/shinyskills
-    rev: v0.1.0  # Use the git tag you want
+    rev: v0.2.0  # Use the git tag you want
     hooks:
       - id: shinyskills-validate
         # Optional: limit search to your project directory
