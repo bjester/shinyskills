@@ -3,6 +3,7 @@
 //
 // Derived from agentskills/skills-ref (Apache-2.0)
 //! Repository configuration file support (`.shinyskills.toml`).
+use globset::{Glob, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -18,6 +19,7 @@ pub const CONFIG_FILE_NAME: &str = ".shinyskills.toml";
 /// Root of a `.shinyskills.toml` configuration file.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Config {
     /// Validation-related settings.
     #[serde(default)]
@@ -30,6 +32,7 @@ pub struct Config {
 /// sync with the Serde field defaults.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ValidationConfig {
     /// Extra frontmatter keys accepted beyond the built-in set.
     #[serde(default = "default_allowed_fields")]
@@ -85,6 +88,7 @@ fn default_scan_extensions() -> Vec<String> {
 ///
 /// # Returns
 /// The repository root, or `None` when no `.git` ancestor exists.
+#[must_use]
 pub fn find_repository_root(start_path: &Path) -> Option<PathBuf> {
     let absolute = absolute_path(start_path);
 
@@ -110,6 +114,7 @@ pub fn find_repository_root(start_path: &Path) -> Option<PathBuf> {
 /// Returns `None` when there is no `.git` ancestor or when the repository root
 /// contains no `.shinyskills.toml`. Nested configuration files are intentionally
 /// ignored; only `<repository-root>/.shinyskills.toml` is ever used.
+#[must_use]
 pub fn find_repository_config(start_path: &Path) -> Option<PathBuf> {
     let root = find_repository_root(start_path)?;
     let config_path = root.join(CONFIG_FILE_NAME);
@@ -141,7 +146,7 @@ pub fn load_config(path: &Path) -> Result<Config, SkillError> {
         source,
     })?;
 
-    toml::from_str::<Config>(&content).map_err(|e| SkillError::ConfigParse {
+    toml::from_str(&content).map_err(|e| SkillError::ConfigParse {
         path: path.to_path_buf(),
         message: e.to_string(),
     })
@@ -161,26 +166,15 @@ pub fn resolve_validation_options(
     mode: ValidationMode,
 ) -> Result<ValidationOptions, SkillError> {
     let defaults = ValidationConfig::default();
-    let (config_allowed, ignore_globs, config_scan) = match config {
-        Some(c) => (
-            c.validation.allowed_fields.clone(),
-            c.validation.ignore_files.clone(),
-            c.validation.scan_extensions.clone(),
-        ),
-        None => (
-            defaults.allowed_fields.clone(),
-            defaults.ignore_files.clone(),
-            defaults.scan_extensions.clone(),
-        ),
-    };
+    let validation = config.map_or(&defaults, |config| &config.validation);
 
     let mut allowed_fields: HashSet<String> = HashSet::new();
-    allowed_fields.extend(mode.allowed_fields().iter().map(|f| f.to_string()));
-    allowed_fields.extend(config_allowed);
+    allowed_fields.extend(mode.allowed_fields().iter().map(|field| field.to_string()));
+    allowed_fields.extend(validation.allowed_fields.iter().cloned());
 
-    let mut builder = globset::GlobSetBuilder::new();
-    for pattern in &ignore_globs {
-        let glob = globset::Glob::new(pattern).map_err(|source| SkillError::InvalidIgnoreGlob {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in &validation.ignore_files {
+        let glob = Glob::new(pattern).map_err(|source| SkillError::InvalidIgnoreGlob {
             pattern: pattern.clone(),
             source,
         })?;
@@ -189,11 +183,11 @@ pub fn resolve_validation_options(
     let ignore_files = builder
         .build()
         .map_err(|source| SkillError::InvalidIgnoreGlob {
-            pattern: ignore_globs.join(", "),
+            pattern: validation.ignore_files.join(", "),
             source,
         })?;
 
-    let scan_extensions = normalize_scan_extensions(&config_scan);
+    let scan_extensions = normalize_scan_extensions(&validation.scan_extensions);
 
     Ok(ValidationOptions::new(
         allowed_fields,
@@ -224,7 +218,7 @@ fn normalize_scan_extensions(extensions: &[String]) -> Vec<String> {
 /// per-run caching.
 fn absolute_path(path: &Path) -> PathBuf {
     match std::env::current_dir() {
-        Ok(cwd) if !path.is_absolute() => normalize_components(&cwd.join(path)),
+        Ok(current_dir) if !path.is_absolute() => normalize_components(&current_dir.join(path)),
         _ => normalize_components(path),
     }
 }
@@ -262,13 +256,15 @@ fn normalize_components(path: &Path) -> PathBuf {
     }
 
     let mut normalized = PathBuf::new();
-    for part in root.iter().chain(stack.iter()) {
+    let parts = root.iter().chain(stack.iter());
+    for part in parts {
         normalized.push(part);
     }
     normalized
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -332,16 +328,27 @@ scan_extensions = [\".md\", \".markdown\"]
         );
     }
 
+    /// How the repository's `.git` entry is spelled.
+    enum GitLayout {
+        /// A normal checkout with `.git/` as a directory.
+        Directory,
+        /// A worktree with `.git` as a file pointing elsewhere.
+        WorktreeFile,
+    }
+
     /// Build `<root>/.git` (directory or worktree file) plus a skill directory.
-    fn make_repo(root: &std::path::Path, worktree_git: bool) -> std::path::PathBuf {
+    fn make_repo(root: &Path, git_layout: GitLayout) -> PathBuf {
         let skill_dir = root.join("skills").join("skill-a");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        if worktree_git {
-            std::fs::write(root.join(".git"), "gitdir: /elsewhere\n").unwrap();
-        } else {
-            std::fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(&skill_dir).unwrap();
+        match git_layout {
+            GitLayout::Directory => {
+                fs::create_dir_all(root.join(".git")).unwrap();
+            }
+            GitLayout::WorktreeFile => {
+                fs::write(root.join(".git"), "gitdir: /elsewhere\n").unwrap();
+            }
         }
-        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: skill-a\n---\n").unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "---\nname: skill-a\n---\n").unwrap();
         skill_dir
     }
 
@@ -349,8 +356,8 @@ scan_extensions = [\".md\", \".markdown\"]
     fn repository_root_found_from_skill_dir_and_skill_md() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("repo");
-        let skill_dir = make_repo(&root, false);
-        std::fs::write(root.join(".shinyskills.toml"), "[validation]\n").unwrap();
+        let skill_dir = make_repo(&root, GitLayout::Directory);
+        fs::write(root.join(".shinyskills.toml"), "[validation]\n").unwrap();
 
         assert_eq!(find_repository_root(&skill_dir), Some(root.clone()));
         assert_eq!(
@@ -371,8 +378,8 @@ scan_extensions = [\".md\", \".markdown\"]
     fn repository_root_found_from_worktree_git_file() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("repo");
-        let skill_dir = make_repo(&root, true);
-        std::fs::write(root.join(".shinyskills.toml"), "[validation]\n").unwrap();
+        let skill_dir = make_repo(&root, GitLayout::WorktreeFile);
+        fs::write(root.join(".shinyskills.toml"), "[validation]\n").unwrap();
 
         assert_eq!(find_repository_root(&skill_dir), Some(root.clone()));
         assert_eq!(
@@ -385,15 +392,15 @@ scan_extensions = [\".md\", \".markdown\"]
     fn nested_configs_are_ignored() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("repo");
-        let skill_dir = make_repo(&root, false);
-        std::fs::write(root.join(".shinyskills.toml"), "[validation]\n").unwrap();
+        let skill_dir = make_repo(&root, GitLayout::Directory);
+        fs::write(root.join(".shinyskills.toml"), "[validation]\n").unwrap();
         // Intermediate and skill-level configurations must never be discovered.
-        std::fs::write(
+        fs::write(
             root.join("skills").join(".shinyskills.toml"),
             "[validation]\n",
         )
         .unwrap();
-        std::fs::write(skill_dir.join(".shinyskills.toml"), "[validation]\n").unwrap();
+        fs::write(skill_dir.join(".shinyskills.toml"), "[validation]\n").unwrap();
 
         assert_eq!(
             find_repository_config(&skill_dir),
@@ -406,8 +413,8 @@ scan_extensions = [\".md\", \".markdown\"]
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("plain");
         let skill_dir = root.join("skill-a");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: skill-a\n---\n").unwrap();
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "---\nname: skill-a\n---\n").unwrap();
 
         assert_eq!(find_repository_config(&skill_dir), None);
     }
@@ -416,11 +423,11 @@ scan_extensions = [\".md\", \".markdown\"]
     fn baseline_options_ignore_nothing_and_scan_markdown_only() {
         let options = resolve_validation_options(None, ValidationMode::Default).unwrap();
 
-        assert!(!options.is_ignored(std::path::Path::new("CHANGELOG.md")));
-        assert!(options.is_scannable(std::path::Path::new("SKILL.md")));
-        assert!(options.is_scannable(std::path::Path::new("references/GUIDE.MD")));
-        assert!(!options.is_scannable(std::path::Path::new("scripts/run.sh")));
-        assert!(!options.is_scannable(std::path::Path::new("tests/run.test.cjs")));
+        assert!(!options.is_ignored(Path::new("CHANGELOG.md")));
+        assert!(options.is_scannable(Path::new("SKILL.md")));
+        assert!(options.is_scannable(Path::new("references/GUIDE.MD")));
+        assert!(!options.is_scannable(Path::new("scripts/run.sh")));
+        assert!(!options.is_scannable(Path::new("tests/run.test.cjs")));
         assert!(options.allows_field("name"));
         assert!(!options.allows_field("user-invocable"));
     }
@@ -436,9 +443,9 @@ scan_extensions = [\".md\", \".markdown\"]
 
         let options = resolve_validation_options(Some(&config), ValidationMode::Default).unwrap();
 
-        assert!(options.is_ignored(std::path::Path::new("CHANGELOG.md")));
-        assert!(options.is_ignored(std::path::Path::new("docs/nested/note.txt")));
-        assert!(!options.is_ignored(std::path::Path::new("references/CHANGELOG.md")));
+        assert!(options.is_ignored(Path::new("CHANGELOG.md")));
+        assert!(options.is_ignored(Path::new("docs/nested/note.txt")));
+        assert!(!options.is_ignored(Path::new("references/CHANGELOG.md")));
         assert!(options.allows_field("user-invocable"));
         assert!(options.allows_field("name"));
     }
@@ -449,19 +456,19 @@ scan_extensions = [\".md\", \".markdown\"]
             toml::from_str("[validation]\nscan_extensions = [\"MD\", \".sh\"]\n").unwrap();
         let options = resolve_validation_options(Some(&config), ValidationMode::Default).unwrap();
 
-        assert!(options.is_scannable(std::path::Path::new("a.md")));
-        assert!(options.is_scannable(std::path::Path::new("scripts/run.sh")));
-        assert!(!options.is_scannable(std::path::Path::new("notes.txt")));
+        assert!(options.is_scannable(Path::new("a.md")));
+        assert!(options.is_scannable(Path::new("scripts/run.sh")));
+        assert!(!options.is_scannable(Path::new("notes.txt")));
     }
 
     #[test]
     fn invalid_glob_reports_offending_pattern() {
         let config: Config = toml::from_str("[validation]\nignore_files = [\"[\"]\n").unwrap();
         let err = resolve_validation_options(Some(&config), ValidationMode::Default).unwrap_err();
-        match err {
-            SkillError::InvalidIgnoreGlob { pattern, .. } => assert_eq!(pattern, "["),
-            other => panic!("unexpected error: {:?}", other),
-        }
+        let SkillError::InvalidIgnoreGlob { pattern, .. } = &err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert_eq!(pattern.as_str(), "[");
     }
 
     #[test]
@@ -469,28 +476,27 @@ scan_extensions = [\".md\", \".markdown\"]
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join(".shinyskills.toml");
         let err = load_config(&path).unwrap_err();
-        match err {
-            SkillError::ConfigNotFound { path: err_path } => assert_eq!(err_path, path),
-            other => panic!("unexpected error: {:?}", other),
-        }
+        let SkillError::ConfigNotFound { path: err_path } = &err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert_eq!(err_path, &path);
     }
 
     #[test]
     fn load_malformed_config_reports_path_and_position() {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join(".shinyskills.toml");
-        std::fs::write(&path, "this is not = valid = toml\n").unwrap();
+        fs::write(&path, "this is not = valid = toml\n").unwrap();
         let err = load_config(&path).unwrap_err();
-        match err {
-            SkillError::ConfigParse {
-                path: err_path,
-                message,
-            } => {
-                assert_eq!(err_path, path);
-                assert!(message.contains("line"), "message: {}", message);
-            }
-            other => panic!("unexpected error: {:?}", other),
-        }
+        let SkillError::ConfigParse {
+            path: err_path,
+            message,
+        } = &err
+        else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert_eq!(err_path, &path);
+        assert!(message.contains("line"), "message: {}", message);
     }
 
     #[test]
@@ -538,7 +544,7 @@ scan_extensions = [\".md\", \".markdown\"]
     fn repository_root_is_stable_across_dot_spellings() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().join("repo");
-        let skill_dir = make_repo(&root, false);
+        let skill_dir = make_repo(&root, GitLayout::Directory);
 
         assert_eq!(
             find_repository_root(&skill_dir.join(".")),
