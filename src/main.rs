@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // Derived from agentskills/skills-ref (Apache-2.0)
+//! Command-line interface for validating and describing Agent Skills.
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 

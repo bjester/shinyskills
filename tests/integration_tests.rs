@@ -1,3 +1,4 @@
+//! End-to-end checks for the shinyskills library and command line interface.
 #![allow(clippy::unwrap_used)]
 use std::fs;
 use std::path::{Path, PathBuf};

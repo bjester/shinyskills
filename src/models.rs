@@ -184,6 +184,7 @@ impl ValidationReport {
     }
 
     /// Whether the validated skill may be used, ignoring warnings.
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
     }
