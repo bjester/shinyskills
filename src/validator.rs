@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::models::ValidationOptions;
+use crate::models::{ParsedFrontmatter, ValidationOptions};
 use crate::parser::{
     find_skill_md, is_path_referenced, parse_frontmatter, scan_skill_files, ReferenceStatus,
 };
@@ -386,8 +386,8 @@ pub fn validate_with_options(
         Err(e) => return (Vec::new(), vec![format!("Failed to read SKILL.md: {}", e)]),
     };
 
-    let (metadata, body) = match parse_frontmatter(&content) {
-        Ok(m) => m,
+    let ParsedFrontmatter { metadata, body } = match parse_frontmatter(&content) {
+        Ok(parsed) => parsed,
         Err(e) => return (Vec::new(), vec![e.to_string()]),
     };
 

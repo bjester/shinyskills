@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: MIT
 //
 // Derived from agentskills/skills-ref (Apache-2.0)
+//! XML prompt block generation for discovered Agent Skills.
 use std::path::Path;
 
-use crate::parser::{find_skill_md, read_properties};
+use crate::parser;
 
-/// Generate the <available_skills> XML block for inclusion in agent prompts.
+/// Generate the `<available_skills>` XML block for inclusion in agent prompts.
 ///
 /// This XML format is what Anthropic uses and recommends for Claude models.
 /// Skill Clients may format skill information differently to suit their
@@ -16,7 +17,7 @@ use crate::parser::{find_skill_md, read_properties};
 /// * `skill_dirs` - List of paths to skill directories
 ///
 /// # Returns
-/// XML string with <available_skills> block containing each skill's
+/// XML string with `<available_skills>` block containing each skill's
 /// name, description, and location.
 ///
 /// Example output:
@@ -29,6 +30,7 @@ use crate::parser::{find_skill_md, read_properties};
 /// </skill>
 /// </available_skills>
 /// ```
+#[must_use]
 pub fn to_prompt(skill_dirs: &[&Path]) -> String {
     if skill_dirs.is_empty() {
         return "<available_skills>\n</available_skills>".to_string();
@@ -37,19 +39,19 @@ pub fn to_prompt(skill_dirs: &[&Path]) -> String {
     let mut lines = vec!["<available_skills>".to_string()];
 
     for skill_dir in skill_dirs {
-        let props = match read_properties(skill_dir) {
+        let properties = match parser::read_properties(skill_dir) {
             Ok(p) => p,
             Err(_) => continue,
         };
 
         lines.push("<skill>".to_string());
-        lines.push(format!("<name>{}</name>", escape_xml(&props.name)));
+        lines.push(format!("<name>{}</name>", escape_xml(&properties.name)));
         lines.push(format!(
             "<description>{}</description>",
-            escape_xml(&props.description)
+            escape_xml(&properties.description)
         ));
 
-        if let Some(skill_md) = find_skill_md(skill_dir) {
+        if let Some(skill_md) = parser::find_skill_md(skill_dir) {
             lines.push(format!("<location>{}</location>", skill_md.display()));
         }
 
